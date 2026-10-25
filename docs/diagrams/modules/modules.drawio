@@ -1,0 +1,150 @@
+<mxfile host="app.diagrams.net" agent="code-to-diagram">
+  <diagram id="c2d-2ecaec100f24" name="Page-1">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1316" pageHeight="1080" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="ENTRY" value="Entry" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="550.03" y="40" width="160" height="226" as="geometry" />
+        </mxCell>
+        <mxCell id="FEATURES" value="Features: plan and execute" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="432" y="424" width="358" height="194" as="geometry" />
+        </mxCell>
+        <mxCell id="WHO" value="Who is in a video" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="424" width="344" height="194" as="geometry" />
+        </mxCell>
+        <mxCell id="ADAPTERS" value="Outside world" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="256.33" y="674" width="308" height="194" as="geometry" />
+        </mxCell>
+        <mxCell id="DISK" value="Files on disk" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="932.84" y="674" width="344" height="194" as="geometry" />
+        </mxCell>
+        <mxCell id="CLI" value="cli.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="ENTRY">
+          <mxGeometry x="24" y="54" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="ADMIN" value="admin.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="ENTRY">
+          <mxGeometry x="24" y="156" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="PIPE" value="pipeline.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="575.03" y="322" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="TAGS" value="tagging.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="FEATURES">
+          <mxGeometry x="24" y="54" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="LINKS" value="facelinks.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="FEATURES">
+          <mxGeometry x="199" y="54" width="114" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="DESCRIPTIONS" value="descriptions.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="FEATURES">
+          <mxGeometry x="24" y="124" width="135" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="ALBUMS" value="albums.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="FEATURES">
+          <mxGeometry x="199" y="124" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="REFS" value="references.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="WHO">
+          <mxGeometry x="24" y="54" width="121" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="CALIB" value="calibration.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="WHO">
+          <mxGeometry x="192" y="54" width="128" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="MATCH" value="matcher.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="WHO">
+          <mxGeometry x="24" y="124" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="ASSIGN" value="assignment.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="WHO">
+          <mxGeometry x="192" y="124" width="121" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="SYNO" value="synology.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="ADAPTERS">
+          <mxGeometry x="24" y="54" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="FACES" value="faces.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="ADAPTERS">
+          <mxGeometry x="174" y="54" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="DESCRIBE" value="describe.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="ADAPTERS">
+          <mxGeometry x="24" y="124" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="SCANNER" value="scanner.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="ADAPTERS">
+          <mxGeometry x="174" y="124" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="STATE" value="state.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="DISK">
+          <mxGeometry x="24" y="54" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="CACHES" value="facecache.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="DISK">
+          <mxGeometry x="192" y="54" width="114" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="CRED" value="credentials.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="DISK">
+          <mxGeometry x="24" y="124" width="128" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="CONF" value="config.py" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="DISK">
+          <mxGeometry x="192" y="124" width="110" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="e24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.0000;exitY=0.5000;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.2391;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="PIPE">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="558.03" y="117" />
+              <mxPoint x="558.03" y="333" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e25" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.4477;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.4477;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="ADMIN">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e26" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.5000;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.5531;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="PIPE" target="FEATURES">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e27" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.0000;exitY=0.5652;exitDx=0;exitDy=0;entryX=0.9767;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="PIPE" target="WHO">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.0000;exitY=0.8261;exitDx=0;exitDy=0;entryX=0.5184;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="PIPE" target="ADAPTERS">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="416" y="360" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e29" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.8261;exitDx=0;exitDy=0;entryX=0.0581;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="PIPE" target="DISK">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="952.84" y="360" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e30" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.1848;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.7852;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="FEATURES" target="ADAPTERS">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e31" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.9588;exitDx=0;exitDy=0;entryX=0.0233;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="FEATURES" target="DISK">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e32" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.8144;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.2073;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="WHO" target="ADAPTERS">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e33" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.6091;exitY=0.0000;exitDx=0;exitDy=0;entryX=0.5000;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="ADMIN" target="CRED">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="641.03" y="180" />
+              <mxPoint x="1072.84" y="180" />
+              <mxPoint x="1072.84" y="782" />
+              <mxPoint x="1020.84" y="782" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e34" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.8261;exitDx=0;exitDy=0;entryX=0.0727;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="ADMIN" target="STATE">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="legend" value="Legend" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="40" y="908" width="241.20" height="132" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r0" value="entry and orchestration" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#dae8fc;strokeColor=#6c8ebf;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="28" width="241.20" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r1" value="what to write (plan and execute)" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="54" width="241.20" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r2" value="talks to the outside" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#fff2cc;strokeColor=#d6b656;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="80" width="241.20" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r3" value="files on disk" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#f5f5f5;strokeColor=#666666;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="106" width="241.20" height="26" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

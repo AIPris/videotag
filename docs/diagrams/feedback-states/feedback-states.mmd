@@ -1,0 +1,16 @@
+%% src: videotag/tagging.py videotag/facelinks.py videotag/matcher.py
+stateDiagram-v2
+  [*] --> Unmatched
+  Unmatched --> Suggested : few frames match, tag Name?
+  Unmatched --> Confident : enough frames match
+  Suggested --> Confident : stronger match later
+  Suggested --> Confirmed : user adds tag Name
+  Confident --> Rejected : user removes the tag
+  Confident --> Rejected : user removes the person in People
+  Suggested --> Rejected : user removes tag Name?
+  Confident --> [*]
+  Confirmed --> [*]
+  Rejected --> [*]
+  note right of Confident : tag Name, People-page link, album entry
+  note right of Rejected : never added again, tool takes its own tag back
+  note right of Confirmed : the user's own tag is never touched

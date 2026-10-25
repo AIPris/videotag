@@ -1,0 +1,27 @@
+%% src: videotag/
+%% legend: blue=runs on this PC; green=on the NAS; yellow=stored data
+flowchart LR
+  subgraph PC [This PC]
+    TASK([Task Scheduler<br/>daily])
+    CLI[videotag run]
+    FF[ffmpeg<br/>cuts frames]
+    FACE[FaceEngine<br/>OpenCV, CPU]
+    VLM[Describer<br/>Qwen3-VL 4B, GPU]
+    VAULT[(Credential Manager<br/>NAS login)]
+    DATA[(Data home<br/>state, caches, logs)]
+  end
+  subgraph NAS [Synology NAS]
+    API[Photos web API]
+    LIB[(Library<br/>photos, videos, people)]
+  end
+  TASK --> CLI
+  CLI -.->|reads login| VAULT
+  CLI --> FF
+  CLI --> FACE
+  CLI --> VLM
+  CLI -.->|state, caches| DATA
+  CLI -->|reads library,<br/>writes tags, faces,<br/>descriptions, albums| API
+  API --- LIB
+  class TASK,CLI,FF,FACE,VLM blue
+  class API,LIB green
+  class VAULT,DATA yellow

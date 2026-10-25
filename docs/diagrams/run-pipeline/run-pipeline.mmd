@@ -1,0 +1,19 @@
+%% src: videotag/pipeline.py videotag/tagging.py videotag/facelinks.py videotag/descriptions.py videotag/albums.py videotag/references.py videotag/calibration.py videotag/library.py
+%% legend: blue=read-only steps; green=writes to Photos (only with --apply)
+flowchart TD
+  A([videotag run]) --> B[load_library]
+  B --> C[build_references<br/>from named people]
+  C --> D[person_models<br/>per-person thresholds]
+  D --> E[sync_feedback<br/>tags, faces, descriptions]
+  E --> F[_analyse every video<br/>faces and description]
+  F --> G[match_video]
+  G --> H[plan_tag_changes]
+  H --> I[plan_face_changes]
+  I --> J[plan_description_changes]
+  J --> K[plan_album_changes]
+  K --> L{--apply?}
+  L -->|no| M([dry run: log only])
+  L -->|yes| N[execute tags, faces,<br/>descriptions, albums]
+  N --> O([save state and report])
+  class B,C,D,E,F,G,H,I,J,K blue
+  class N green

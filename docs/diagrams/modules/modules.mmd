@@ -1,0 +1,47 @@
+﻿%% src: videotag/
+%% legend: blue=entry and orchestration; green=what to write (plan and execute); yellow=talks to the outside; gray=files on disk
+flowchart TD
+  subgraph ENTRY [Entry]
+    CLI[cli.py]
+    ADMIN[admin.py]
+  end
+  PIPE[pipeline.py]
+  subgraph FEATURES [Features: plan and execute]
+    TAGS[tagging.py]
+    LINKS[facelinks.py]
+    DESCRIPTIONS[descriptions.py]
+    ALBUMS[albums.py]
+  end
+  subgraph WHO [Who is in a video]
+    REFS[references.py]
+    CALIB[calibration.py]
+    MATCH[matcher.py]
+    ASSIGN[assignment.py]
+  end
+  subgraph ADAPTERS [Outside world]
+    SYNO[synology.py]
+    FACES[faces.py]
+    DESCRIBE[describe.py]
+    SCANNER[scanner.py]
+  end
+  subgraph DISK [Files on disk]
+    STATE[state.py]
+    CACHES[facecache.py]
+    CRED[credentials.py]
+    CONF[config.py]
+  end
+  CLI --> PIPE
+  CLI --> ADMIN
+  PIPE --> FEATURES
+  PIPE --> WHO
+  PIPE --> ADAPTERS
+  PIPE --> DISK
+  FEATURES --> ADAPTERS
+  FEATURES --> DISK
+  WHO --> ADAPTERS
+  ADMIN --> CRED
+  ADMIN --> STATE
+  class CLI,ADMIN,PIPE blue
+  class TAGS,LINKS,DESCRIPTIONS,ALBUMS,REFS,CALIB,MATCH,ASSIGN green
+  class SYNO,FACES,DESCRIBE,SCANNER yellow
+  class STATE,CACHES,CRED,CONF gray

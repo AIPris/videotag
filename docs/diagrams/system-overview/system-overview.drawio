@@ -1,0 +1,87 @@
+<mxfile host="app.diagrams.net" agent="code-to-diagram">
+  <diagram id="c2d-a06dab71430a" name="Page-1">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1615" pageHeight="794" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="PC" value="This PC" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="821" height="568" as="geometry" />
+        </mxCell>
+        <mxCell id="NAS" value="Synology NAS" style="swimlane;fontStyle=1;startSize=30;html=1;whiteSpace=wrap;container=1;collapsible=0;fillColor=#f5f5f5;strokeColor=#666666;swimlaneFillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1037" y="246" width="538" height="156" as="geometry" />
+        </mxCell>
+        <mxCell id="TASK" value="Task Scheduler&lt;br&gt;daily" style="rounded=1;arcSize=50;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="24" y="180" width="142" height="56" as="geometry" />
+        </mxCell>
+        <mxCell id="CLI" value="videotag run" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="342" y="190" width="114" height="76" as="geometry" />
+        </mxCell>
+        <mxCell id="FF" value="ffmpeg&lt;br&gt;cuts frames" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="659.50" y="172" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="FACE" value="FaceEngine&lt;br&gt;OpenCV, CPU" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="659.50" y="270" width="110" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="VLM" value="Describer&lt;br&gt;Qwen3-VL 4B, GPU" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="643.50" y="368" width="142" height="58" as="geometry" />
+        </mxCell>
+        <mxCell id="VAULT" value="Credential Manager&lt;br&gt;NAS login" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="635.50" y="54" width="158" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="DATA" value="Data home&lt;br&gt;state, caches, logs" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="PC">
+          <mxGeometry x="632" y="466" width="165" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="API" value="Photos web API" style="rounded=1;whiteSpace=wrap;html=1;arcSize=12;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="NAS">
+          <mxGeometry x="24" y="70" width="128" height="46" as="geometry" />
+        </mxCell>
+        <mxCell id="LIB" value="Library&lt;br&gt;photos, videos, people" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="NAS">
+          <mxGeometry x="328" y="54" width="186" height="78" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.5357;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.2632;entryDx=0;entryDy=0;" edge="1" parent="1" source="TASK" target="CLI">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e12" value="reads login" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;dashed=1;exitX=0.9298;exitY=0.0000;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.7436;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="VAULT">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.2632;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.6552;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="FF">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.6842;exitDx=0;exitDy=0;entryX=0.5000;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="FACE">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="754.50" y="282" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=0.9298;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.1379;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="VLM">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e16" value="state, caches" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;dashed=1;exitX=0.8246;exitY=1.0000;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.2564;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="DATA">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="e17" value="reads library,&lt;br&gt;writes tags, faces,&lt;br&gt;descriptions, albums" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=classic;exitX=1.0000;exitY=0.8947;exitDx=0;exitDy=0;entryX=0.5000;entryY=0.0000;entryDx=0;entryDy=0;" edge="1" parent="1" source="CLI" target="API">
+          <mxGeometry as="geometry" relative="1" x="0.200">
+            <Array as="points">
+              <mxPoint x="1125" y="298" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;fontSize=11;labelBackgroundColor=#ffffff;endArrow=none;exitX=1.0000;exitY=0.5000;exitDx=0;exitDy=0;entryX=0.0000;entryY=0.5000;entryDx=0;entryDy=0;" edge="1" parent="1" source="API" target="LIB">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="legend" value="Legend" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=0;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="40" y="648" width="200" height="106" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r0" value="runs on this PC" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#dae8fc;strokeColor=#6c8ebf;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="28" width="200" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r1" value="on the NAS" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#d5e8d4;strokeColor=#82b366;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="54" width="200" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-r2" value="stored data" style="text;html=1;align=left;verticalAlign=middle;spacingLeft=8;fontSize=11;whiteSpace=nowrap;overflow=hidden;fillColor=#fff2cc;strokeColor=#d6b656;rotatable=0;portConstraint=eastwest;" vertex="1" parent="legend">
+          <mxGeometry y="80" width="200" height="26" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

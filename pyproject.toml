@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videotag"
+dynamic = ["version"]
+description = "Make videos in Synology Photos searchable by people, topics, objects and places."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "requests",
+    "keyring",
+]
+
+[project.optional-dependencies]
+# The bilingual descriptions. Install a CUDA build of torch first (https://pytorch.org), then `pip install ".[describe]"`.
+describe = ["torch", "transformers", "accelerate", "pyyaml", "pillow"]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+videotag = "videotag.cli:main"
+
+[tool.setuptools]
+packages = ["videotag"]
+
+[tool.setuptools.dynamic]
+version = { attr = "videotag.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"videotag/describe.py" = ["E501"]  # the model prompt is one long block of text on purpose

@@ -1,0 +1,29 @@
+# Secrets and anything that could hold them. The NAS login lives in the OS credential store, never in the repo.
+creds.txt
+*.pem
+*.key
+.env
+secrets/
+
+# Private working notes: real names, hostnames and descriptions of personal videos
+docs/lab-notes/
+
+# Everything the tool writes lives outside the repo (see VIDEOTAG_HOME), but keep it out if it ever lands here
+state/
+cache/
+models/
+logs/
+reports/
+.cache/
+
+# Python and tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.part

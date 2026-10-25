@@ -1,0 +1,17 @@
+%% src: videotag/pipeline.py videotag/facecache.py videotag/descache.py videotag/scanner.py
+%% legend: blue=cache lookups; yellow=slow work, done only on a cache miss
+flowchart TD
+  A([one video]) --> B{faces cached?}
+  B -->|yes| C{description cached?}
+  B -->|no| D[video_frames<br/>download once, cut frames]
+  C -->|yes| E([use the caches])
+  C -->|no| D
+  D --> F{faces missing?}
+  F -->|yes| G[engine.faces<br/>save facecache]
+  F -->|no| H{description missing?}
+  G --> H
+  H -->|yes| I[Describer<br/>6 frames, save descache]
+  H -->|no| J([done])
+  I --> J
+  class B,C,F,H blue
+  class D,G,I yellow
