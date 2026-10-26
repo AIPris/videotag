@@ -36,6 +36,16 @@ videotag run --apply --max-writes 5     # first small write; check the result in
 
 Full instructions, scheduling a daily run, correcting results, backups and troubleshooting: **[docs/howto.md](docs/howto.md)**.
 
+## Dashboard (optional)
+
+Everything above works headless, and the dashboard is never needed for it. If you want to see what is going on:
+
+```
+videotag gui        # opens http://127.0.0.1:8765/ in your browser (Ctrl+C in the terminal stops it)
+```
+
+It shows the run in progress (phase, videos done, time left), the latest results per video and person with the scores behind each decision, what has been written to Photos and what you corrected, the history of runs, the live log and a health check. It watches the same data folder and log as a scheduled run, so it shows those too, it can start a dry run or (after a confirmation) an apply run, and it can change the Synology account (each account keeps its own saved data, see [switching accounts](docs/howto.md#switching-accounts)). Standard library only, nothing loaded from the internet, reachable from this PC only. Details: [docs/howto.md](docs/howto.md#dashboard-optional).
+
 ## Safe by design
 
 - **Dry run is the default.** Nothing is written without `--apply`, and `--max-writes` caps each kind of write per run.

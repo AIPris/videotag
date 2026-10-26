@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 
 import numpy as np
@@ -7,7 +8,7 @@ import pytest
 from videotag import descache, facecache
 from videotag.describe import Description
 from videotag.faces import Face
-from videotag.lock import AlreadyRunning, single_run
+from videotag.lock import AlreadyRunning, single_run, taken_at
 from videotag.state import State, StateError, WrittenTag
 
 
@@ -97,3 +98,38 @@ def test_a_stale_lock_is_taken_over(tmp_path):
     os.utime(lock, (old, old))
     with single_run(lock, stale_after=3600):
         assert lock.exists()
+
+
+def test_a_run_that_outlasts_the_stale_limit_keeps_its_lock(tmp_path):
+    lock = tmp_path / "run.lock"
+    with single_run(lock, stale_after=1.0, heartbeat=0.05):
+        time.sleep(1.6)  # longer than the limit: only a refreshed lock is still held
+        with pytest.raises(AlreadyRunning), single_run(lock, stale_after=1.0):
+            pass
+        assert time.time() - lock.stat().st_mtime < 1.0
+
+
+def test_the_heartbeat_ends_with_the_run_and_does_not_bring_the_lock_back(tmp_path):
+    lock = tmp_path / "run.lock"
+    with single_run(lock, heartbeat=0.05):
+        pass
+    time.sleep(0.2)
+    assert not lock.exists()
+    assert not any(thread.name == "videotag-lock-heartbeat" for thread in threading.enumerate())
+
+
+def test_the_lock_records_when_it_was_taken_even_after_it_was_refreshed(tmp_path):
+    lock = tmp_path / "run.lock"
+    before = time.time()
+    with single_run(lock, heartbeat=0.05):
+        time.sleep(0.3)
+        assert before - 0.01 <= taken_at(lock) <= before + 0.2
+        assert lock.stat().st_mtime > taken_at(lock) + 0.1
+
+
+def test_a_lock_without_a_record_was_taken_when_it_was_last_written(tmp_path):
+    lock = tmp_path / "run.lock"
+    lock.write_text("")
+    os.utime(lock, (1_000, 1_000))
+    assert taken_at(lock) == 1_000
+    assert taken_at(tmp_path / "missing.lock") is None

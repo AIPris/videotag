@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="videotag-token" content="__TOKEN__">
+<meta name="color-scheme" content="light dark">
+<title>videotag</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1>videotag</h1>
+  <span id="state-badge" class="badge" role="status"></span>
+  <div class="top-actions">
+    <button id="account-open" type="button" class="account" title="Synology account"></button>
+    <button id="run-open" type="button" class="primary">Start a run</button>
+  </div>
+</header>
+
+<p id="offline" class="offline" role="alert" hidden>The dashboard server does not answer. Is <code>videotag gui</code> still running in its terminal?</p>
+
+<p id="stale" class="offline" role="alert" hidden>This page is newer than the dashboard that is running, so some buttons cannot work. Close the <code>videotag gui</code> window and start it again.</p>
+
+<main>
+  <section id="run" class="run" aria-label="Run"></section>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" id="tab-overview" aria-controls="view-overview" aria-selected="true">Overview</button>
+    <button type="button" role="tab" id="tab-videos" aria-controls="view-videos" aria-selected="false">Videos</button>
+    <button type="button" role="tab" id="tab-runs" aria-controls="view-runs" aria-selected="false">Runs</button>
+    <button type="button" role="tab" id="tab-log" aria-controls="view-log" aria-selected="false">Log</button>
+    <button type="button" role="tab" id="tab-health" aria-controls="view-health" aria-selected="false">Health</button>
+  </nav>
+
+  <section id="view-overview" role="tabpanel" aria-labelledby="tab-overview"></section>
+  <section id="view-videos" role="tabpanel" aria-labelledby="tab-videos" hidden></section>
+  <section id="view-runs" role="tabpanel" aria-labelledby="tab-runs" hidden></section>
+  <section id="view-log" role="tabpanel" aria-labelledby="tab-log" hidden></section>
+  <section id="view-health" role="tabpanel" aria-labelledby="tab-health" hidden></section>
+</main>
+
+<dialog id="run-dialog" aria-labelledby="run-title">
+  <form method="dialog" id="run-form">
+    <h2 id="run-title">Start a run</h2>
+    <fieldset>
+      <legend class="visually-hidden">What the run does</legend>
+      <label class="choice"><input type="radio" name="mode" value="dry" checked>
+        <span><strong>Dry run</strong> Reads Photos and works out the results. Writes nothing.</span></label>
+      <label class="choice"><input type="radio" name="mode" value="apply">
+        <span><strong>Apply</strong> Also writes the tags, person links, descriptions and albums to Photos.</span></label>
+    </fieldset>
+    <label class="check"><input type="checkbox" id="run-describe" checked> Describe videos (needs the GPU and the description model)</label>
+    <label id="run-cap-row" class="cap" hidden>Write at most
+      <input type="number" id="run-cap" min="1" max="100000" value="100"> changes of each kind
+    </label>
+    <p id="run-warning" class="warning" hidden>Apply changes your Photos library. Removing everything again is only possible from a terminal: <code>videotag undo</code>.</p>
+    <p class="command">Same as running <code id="run-command"></code> in a terminal.</p>
+    <div class="dialog-actions">
+      <button type="button" id="run-cancel">Cancel</button>
+      <button type="submit" id="run-start" class="primary" value="start">Start dry run</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="account-dialog" aria-labelledby="account-title">
+  <form method="dialog" id="account-form" autocomplete="off" novalidate>
+    <h2 id="account-title">Synology account</h2>
+    <p id="account-current"></p>
+    <p id="account-note" class="notice" hidden></p>
+    <fieldset id="account-fields">
+      <legend class="visually-hidden">Login</legend>
+      <label class="field">NAS address
+        <input id="account-url" type="text" inputmode="url" placeholder="https://nas.example.com" autocomplete="off" spellcheck="false"></label>
+      <label class="field">Account name
+        <input id="account-user" type="text" autocomplete="off" spellcheck="false"></label>
+      <label class="field">Password
+        <input id="account-password" type="password" autocomplete="new-password"></label>
+    </fieldset>
+    <p id="account-effect" class="sub" aria-live="polite"></p>
+    <div id="account-parked" class="parked" hidden></div>
+    <p id="account-error" class="warning" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" id="account-cancel">Cancel</button>
+      <button type="submit" id="account-save" class="primary">Check and use this account</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

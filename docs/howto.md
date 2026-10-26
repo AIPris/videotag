@@ -156,7 +156,7 @@ Things to decide, and know:
   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 6)
   Register-ScheduledTask -TaskName videotag -Action $action -Trigger $trigger -Settings $settings
   ```
-- **Overlap.** A run holds a lock (`state\run.lock`); a second start while one is running exits with code 2 and does nothing. A lock older than 6 hours is treated as left over from a crash.
+- **Overlap.** A run holds a lock (`state\run.lock`); a second start while one is running exits with code 2 and does nothing. A running pass refreshes the lock every minute; a lock nobody has refreshed for 6 hours is treated as left over from a crash.
 - **Safety.** Run it without `--apply` for a few days first and read the log, then switch.
 
 ### Test the task properly
@@ -169,10 +169,53 @@ Once everything is cached, a scheduled run never calls ffmpeg, never loads the m
 
 `videotag doctor` also reads the stored login the way a task would; run it from the same kind of session if you can.
 
+## Dashboard (optional)
+
+```
+videotag gui [--port 8765] [--no-browser]
+```
+
+Opens a local web page. It needs nothing beyond the normal install, and no run needs it: the dashboard only *reads* the data folder and the log, so it also shows runs started by the scheduled task or a terminal. Leave it running or close it; closing it never affects a run.
+
+| Tab | What you see |
+|---|---|
+| (top of the page) | The state of the run: starting, analysing (videos done, current video, time left), planning, writing, finished, or stopped early. For a finished run: how long it took and what it planned or wrote |
+| Overview | Videos by result (confident, suggestion, no match, failed), what has been written to Photos, your corrections, and a table per person |
+| Videos | Every video of the latest report. Search by file name, person, topic or object, filter by result or person, open a video for the best match score and matching frames per person, the English and German description, topics, objects and place. Chips show where each person stands: tagged, suggested, not written yet (dashed), confirmed by you (✓) or removed by you (✕) |
+| Runs | Every saved report with its results, newest first |
+| Log | The last lines of the run log, following the newest line |
+| Health | The checks of `videotag doctor`, run on request (it logs in to your NAS and takes a few seconds; the first run loads PyTorch into the dashboard process, which holds a little GPU memory until you close the dashboard) |
+
+**Start a run** opens a dialog. A *dry run* reads Photos and writes nothing. *Apply* writes, shows the write cap and the equivalent terminal command, and needs a click on "Apply changes". The dashboard starts the real `videotag run` as a separate process, so it takes the same run lock as any run: it cannot overlap a scheduled one, and it keeps going if you close the dashboard. **`undo` is deliberately only available from the terminal.**
+
+**Account** (the button in the header) shows which Synology account videotag uses and lets you change it: a new password, or another account or NAS. It checks the login against the NAS first and only then stores it, in the same Windows Credential Manager entry as `videotag credentials set`, so both ways behave identically. See [switching accounts](#switching-accounts).
+
+Notes:
+
+- **After updating videotag, close the dashboard window and start it again.** A running dashboard keeps the code it started with, while the page files are read fresh, so an old dashboard can serve a newer page. The page notices and shows a warning ("This page is newer than the dashboard that is running"), and the buttons that need the newer code say so instead of doing nothing.
+- The dashboard listens on `127.0.0.1` only. The port is fixed (default 8765) so you can bookmark it; `--port 0` picks a free one. If the port is taken, an earlier dashboard is probably still open.
+- It shows file names and descriptions of your videos, so treat the browser tab like the photos themselves. See [security](security.md#the-dashboard).
+- Progress comes from the run log (`run started`, `library: ...`, one line per video). A log from before the dashboard existed has no such markers, so the first run after installing only fills them in.
+
+## Switching accounts
+
+Everything videotag remembers (the state file, the caches, the reports and the log) describes **one account's library**: item ids, tag ids, face ids. Used against another account it would read every tag that is missing there as "removed by you" and remember that for good, and `undo` would delete items by ids that mean something else. So each account has its own copy:
+
+- The active account's data stays where it always was.
+- When you switch to another account (in the dashboard, or with `videotag credentials set`), the old account's state, caches, reports and log are **set aside** under `accounts\<name>-<id>\` in the data folder. The new account starts empty, or gets its own earlier data back if you used it before.
+- A new password for the *same* account moves nothing.
+- Accounts are compared exactly: the NAS address and the account name as typed. `Claude` and `claude` count as two accounts (you can switch back and nothing is lost), because wrongly merging two accounts is the one mistake that cannot be undone.
+- Every command that logs in checks first, before any call to the NAS, that the saved data belongs to the login. If not, it stops with `the saved data belongs to X, but the login is for Y` (the dashboard shows "Account needs attention"). This also catches a login from the `VIDEOTAG_*` environment variables.
+- Switching waits while a run is in progress. If a folder cannot be moved (Explorer or a virus scanner holds a file in it) everything is put back and you are told to close the program.
+- A login from the `VIDEOTAG_*` environment variables takes priority over a stored one, so the dashboard shows it but cannot change it.
+
+**Tags, face links, descriptions and albums that videotag wrote stay in Photos** when you switch away. To remove them, run `videotag undo` while that account is still active, before switching.
+
 ## Commands and options
 
 | Command | What it does |
 |---|---|
+| `videotag gui` | The optional local dashboard (see above) |
 | `videotag run` | One pass over all videos. **Dry run** unless `--apply` |
 | `videotag run --apply` | Same, and writes tags, face links, descriptions and albums |
 | `videotag undo` | Removes everything the tool created, nothing else |
@@ -202,7 +245,7 @@ Exit codes: `0` ok, `1` error (message printed and logged), `2` another run hold
 
 **Move the data folder:** set the `VIDEOTAG_HOME` environment variable (for the user, and for the scheduled task) and move the folder. Default: `%LOCALAPPDATA%\videotag`.
 
-**Change the password:** change it in DSM, then `videotag credentials set`.
+**Change the password:** change it in DSM, then `videotag credentials set` or the Account button of the dashboard (same account: nothing is moved).
 
 **Describe everything again** (for example after a prompt change): delete `state\describe`. Blocks the tool wrote are updated; blocks you edited are left alone.
 
@@ -225,7 +268,7 @@ pip uninstall videotag
 | `ffmpeg was not found on PATH` | A task can have a shorter `PATH` than your terminal. Put ffmpeg in a system-wide `PATH` folder, or run the task as the user whose `PATH` has it. |
 | `PyTorch cannot see a CUDA GPU` | Install a CUDA build of torch (`pip install torch --index-url https://download.pytorch.org/whl/cu128`), update the driver, or use `--no-describe`. |
 | CUDA out of memory | Another program is using the GPU. Close it; the model needs about 9 GB. |
-| `skipped: another run holds run.lock` (exit 2) | A run is in progress. If none is, delete `state\run.lock` (it is also ignored after 6 hours). |
+| `skipped: another run holds run.lock` (exit 2) | A run is in progress. If none is, delete `state\run.lock` (it is also ignored once nobody has refreshed it for 6 hours). |
 | `state file ... is unreadable` | `state\state.json` was edited with a tool that broke it. Restore your backup. Deleting it makes the tool forget which tags are its own. |
 | `login failed` or error code 4xx at startup | Wrong or changed password: `videotag credentials set`. Wrong address: it must be `https://...`. Private certificate: set `VIDEOTAG_CA_BUNDLE`. |
 | Log shows `add_face ... answered code 117` | Normal for videos whose Photos thumbnail is unusable (some HEVC clips). The tool reads the faces back and only counts what was really stored. |

@@ -138,7 +138,7 @@ def test_setting_a_login_verifies_it_before_storing_it(monkeypatch):
     answers = iter(["svc-account", "https://nas.example.com"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr("getpass.getpass", lambda prompt="": "s3cret-pass")
-    monkeypatch.setattr(admin, "_verified", lambda credentials: (_ for _ in ()).throw(CredentialError("wrong login")))
+    monkeypatch.setattr(admin, "verify_login", lambda credentials: (_ for _ in ()).throw(CredentialError("wrong login")))
     with pytest.raises(CredentialError, match="wrong login"):
         admin.cmd_credentials_set(None, None)
     assert delete_credentials() is False  # nothing was stored
@@ -147,7 +147,7 @@ def test_setting_a_login_verifies_it_before_storing_it(monkeypatch):
 def test_migrating_moves_the_login_verifies_it_and_deletes_the_plaintext_file(monkeypatch, tmp_path, capsys):
     legacy = tmp_path / "creds.txt"
     legacy.write_text("Username: svc-account\nPasswort: old-secret\nDomain: https://nas.example.com\n", encoding="utf-8")
-    monkeypatch.setattr(admin, "_verified", lambda credentials: None)
+    monkeypatch.setattr(admin, "verify_login", lambda credentials: None)
     admin.cmd_credentials_migrate(None, type("Args", (), {"file": str(legacy), "delete": True})())
     assert load_credentials()[0].password == "old-secret" and not legacy.exists()
     assert "old-secret" not in capsys.readouterr().out
@@ -156,7 +156,7 @@ def test_migrating_moves_the_login_verifies_it_and_deletes_the_plaintext_file(mo
 def test_migrating_keeps_the_file_when_the_login_does_not_work(monkeypatch, tmp_path):
     legacy = tmp_path / "creds.txt"
     legacy.write_text("Username: svc-account\nPasswort: old-secret\nDomain: https://nas.example.com\n", encoding="utf-8")
-    monkeypatch.setattr(admin, "_verified", lambda credentials: (_ for _ in ()).throw(CredentialError("wrong login")))
+    monkeypatch.setattr(admin, "verify_login", lambda credentials: (_ for _ in ()).throw(CredentialError("wrong login")))
     with pytest.raises(CredentialError):
         admin.cmd_credentials_migrate(None, type("Args", (), {"file": str(legacy), "delete": True})())
     assert legacy.exists() and delete_credentials() is False

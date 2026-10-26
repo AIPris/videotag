@@ -26,6 +26,9 @@ videotag = "videotag.cli:main"
 [tool.setuptools]
 packages = ["videotag"]
 
+[tool.setuptools.package-data]
+videotag = ["gui_assets/*"]  # the page of `videotag gui`
+
 [tool.setuptools.dynamic]
 version = { attr = "videotag.__version__" }
 

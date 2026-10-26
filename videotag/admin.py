@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__
+from .accounts import Identity, apply_login, verify_login
 from .config import HOME, MODELS_DIR
 from .credentials import (
     CredentialError,
@@ -17,7 +18,6 @@ from .credentials import (
     delete_credentials,
     load_credentials,
     parse_legacy_file,
-    store_credentials,
     vault_name,
 )
 from .state import State, StateError
@@ -25,10 +25,21 @@ from .synology import PhotosClient, SynologyError
 
 # -- credentials ------------------------------------------------------------------------------
 
-def _verified(credentials: Credentials) -> None:
-    """Log in once so a wrong address or password is caught before anything is stored."""
-    with PhotosClient(credentials):
-        pass
+def _current_identity() -> Identity | None:
+    try:
+        return Identity.of(load_credentials()[0])
+    except CredentialError:
+        return None
+
+
+def _use_login(credentials: Credentials) -> None:
+    """Check the login, then use it. For another account this sets the saved data of the old one aside."""
+    verify_login(credentials)  # a wrong address or password is caught before anything is stored or moved
+    switched = apply_login(credentials, current=_current_identity())
+    if switched.parked:
+        print(f"The saved data of {switched.previous.label} was set aside. It comes back when you switch to that account again.")
+    if switched.restored:
+        print(f"The saved data of {Identity.of(credentials).label} came back.")
 
 
 def cmd_credentials_set(client, args) -> None:
@@ -36,8 +47,7 @@ def cmd_credentials_set(client, args) -> None:
         raise CredentialError("run this in an interactive terminal: the password is typed in, never passed as an argument")
     credentials = Credentials(input("Account name: ").strip(), getpass.getpass("Password (not shown): "),
                               clean_url(input("NAS address (https://...): ")))
-    _verified(credentials)
-    store_credentials(credentials)
+    _use_login(credentials)
     print(f"Login works and is stored for this Windows user in the credential store ({vault_name()}).")
 
 
@@ -61,10 +71,9 @@ def cmd_credentials_migrate(client, args) -> None:
     """Move the login from the old plaintext file into the credential store, then (optionally) delete the file."""
     path = Path(args.file)
     credentials = parse_legacy_file(path.read_text(encoding="utf-8-sig"))
-    _verified(credentials)
-    store_credentials(credentials)
+    _use_login(credentials)
     stored, _ = load_credentials()
-    _verified(stored)  # the login that was just stored has to work when read back from the store
+    verify_login(stored)  # the login that was just stored has to work when read back from the store
     print(f"Moved the login from {path.name} into the credential store ({vault_name()}); logging in with it works.")
     if args.delete:
         path.unlink()

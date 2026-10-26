@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from videotag import pipeline
+from videotag.analysis import Outcome
 from videotag.describe import Description
 from videotag.descriptions import extract_block
 from videotag.library import Library
@@ -62,12 +64,25 @@ VIDEO = {"id": 1, "filename": "clip.mp4", "filesize": 10, "time": 1, "additional
 CAT = Description("A cat.", "Eine Katze.", ("cat",), ("Katze",), ("cat",), ("Katze",))
 
 
+def analysis_of(*outcomes):
+    """A stand-in for analyse_videos. A generator, like the real one, so that it can be closed."""
+    def analyse(client, engine, describer, videos, fps):
+        yield from outcomes
+    return analyse
+
+
+def every_video_with(description):
+    def analyse(client, engine, describer, videos, fps):
+        yield from [Outcome(item, FRAMES, description) for item in videos]
+    return analyse
+
+
 def prepare(monkeypatch, description=CAT, video=VIDEO):
     model = PersonModel(7, "Alice", np.stack([ALICE_FACE]), threshold=0.5)
     monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [video]))
     monkeypatch.setattr(pipeline, "build_references", lambda client, engine, photos: [])
     monkeypatch.setattr(pipeline, "person_models", lambda sets, threshold: [model])
-    monkeypatch.setattr(pipeline, "_analyse", lambda client, engine, describer, video, fps: (FRAMES, description))
+    monkeypatch.setattr(pipeline, "analyse_videos", every_video_with(description))
     monkeypatch.setattr(pipeline, "frame_crop", lambda client, video, fps, sighting: b"jpeg")
 
 
@@ -166,3 +181,50 @@ def test_removing_the_person_from_the_video_in_photos_is_a_rejection_that_also_t
     assert client.added == [] and client.faces == {}
     assert (1, 7) in reloaded.rejected
     assert client.album_removes == [(900, [1])]  # in the same run, not only the next one
+
+
+def test_a_video_that_could_not_be_fetched_becomes_an_error_row_and_the_run_goes_on(tmp_path, monkeypatch, caplog):
+    prepare(monkeypatch)
+    broken = {**VIDEO, "id": 2, "filename": "bad.mp4"}
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [broken, VIDEO]))
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis_of(Outcome(broken, error=RuntimeError("ffmpeg broke")),
+                                                                Outcome(VIDEO, FRAMES, CAT)))
+    with caplog.at_level("INFO", logger="videotag"):
+        rows = run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
+    assert rows[0] == {"video_id": 2, "filename": "bad.mp4", "error": "ffmpeg broke"}
+    assert rows[1]["video_id"] == 1 and rows[1]["matches"][0]["decision"] == "auto"
+    assert "2 bad.mp4: ffmpeg broke" in caplog.text
+
+
+def test_the_analysis_is_finished_before_anything_is_written_to_photos(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    finished, seen = [], []
+
+    def analysis(client, engine, describer, videos, fps):
+        try:
+            yield from [Outcome(item, FRAMES, CAT) for item in videos]
+        finally:
+            finished.append(True)  # the helper thread is joined here; after this only the calling thread uses the client
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    client = RecordingClient()
+    client.add_tag = lambda item_id, tag_id: seen.append(bool(finished))
+    run(client, State(tmp_path / "state.json"), apply=True)
+    assert seen == [True]
+
+
+def test_the_analysis_is_stopped_when_the_run_fails_midway(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    finished = []
+
+    def analysis(client, engine, describer, videos, fps):
+        try:
+            yield from [Outcome(item, FRAMES, CAT) for item in videos]
+        finally:
+            finished.append(True)
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    monkeypatch.setattr(pipeline, "match_video", lambda *args: (_ for _ in ()).throw(ValueError("matcher broke")))
+    with pytest.raises(ValueError, match="matcher broke"):
+        run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
+    assert finished == [True]

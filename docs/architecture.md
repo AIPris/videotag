@@ -23,7 +23,7 @@
 2. **build_references**: for every *named* person, collect known faces (see below).
 3. **person_models**: one model per person with its own similarity threshold.
 4. **sync_feedback**: compare what the tool wrote last time with what is in Photos now, to learn what the user rejected or confirmed.
-5. **_analyse every video**: faces and description, from the caches where possible.
+5. **analyse_videos**: faces and description of every video, from the caches where possible. The next videos are fetched and read on a helper thread while the vision-language model describes the current one (see below).
 6. **match_video**: who is in the video.
 7. **plan_***: four pure planners compute the changes for tags, People-page face links, descriptions and albums. Nothing has been written yet.
 8. **--apply?** Without it the plan is only logged. With it, the changes are executed (capped by `--max-writes` per kind), the state is saved after each write, and a JSON report is written.
@@ -33,6 +33,8 @@
 ![Video analysis](diagrams/video-analysis/video-analysis.png)
 
 Downloading and detecting are the slow parts, matching is cheap. Per video the tool caches the faces (embedding and position, `state/faces/<id>.npz`) and the description (`state/describe/<id>.json`), keyed by file size, modification time, sampling rate and model/prompt version. A changed reference set or threshold therefore never needs the videos again, and an unchanged library costs seconds per run. The video is downloaded at most once per run, to a temporary folder that is deleted afterwards.
+
+Fetching (network), cutting frames and finding faces (CPU), and describing (GPU) use different hardware, so a helper thread prepares up to eight videos ahead while the calling thread runs the model. The helper keeps only the six frames the model needs, so running ahead costs next to nothing on disk, and only the calling thread uses the model. The results are the same as handling one video at a time, and they come back in library order. A video that cannot be fetched or cut is skipped with an error row; any other error stops the run at that video.
 
 ## How people are recognised
 
@@ -94,14 +96,28 @@ Photos search matches any part of the text, so the block carries **no label word
 |---|---|
 | `cli.py`, `admin.py`, `__main__.py` | Commands; credentials and `doctor` |
 | `pipeline.py` | Orchestrates one run |
+| `analysis.py` | Faces and descriptions for all videos: a helper thread prepares the next videos while the model describes the current one |
 | `tagging.py`, `facelinks.py`, `descriptions.py`, `albums.py` | One feature each: feedback detection, planning (pure) and execution against Photos |
 | `references.py`, `calibration.py`, `matcher.py`, `assignment.py` | Who is in a video: references, thresholds, matching, group-photo assignment |
 | `synology.py` | The Photos web API client; errors never contain URLs or secrets |
 | `faces.py`, `describe.py`, `scanner.py`, `frames.py` | Adapters: OpenCV, the vision-language model, ffmpeg |
 | `state.py`, `facecache.py`, `descache.py`, `lock.py` | Files on disk |
 | `credentials.py`, `config.py` | Where the login comes from; where files go |
+| `accounts.py` | Whose data is on disk, the guard against mixing two accounts, and switching (setting data aside and bringing it back) |
+| `runlog.py`, `dashboard.py` | The optional GUI's read side: the run log as a progress report, and the reports, state and description cache joined into one view (no NAS, no writes) |
+| `launcher.py`, `gui.py`, `gui_assets/` | The optional GUI: start a run as its own process, a loopback-only web server (standard library), and the page |
 
 Design rules the code follows: planning is pure and separate from executing (so every plan can be logged in a dry run and unit-tested without a NAS), anything with I/O is injected, heavy libraries (`torch`, `transformers`) are imported only when a description is needed, and the unit tests need neither a NAS, a GPU nor the real credential store.
+
+### The optional dashboard
+
+`videotag gui` is an observer. A run never calls into it and a headless run never imports it (`cli.py` imports `gui` only inside the `gui` command, and a test pins that). It reads the data folder, and the one interface between a run and anyone watching is the log: `cli.py` writes `run started: dry run|apply` before it even logs in to the NAS (so a run that dies early still shows up as stopped, and an unexpected crash of an unattended command is logged with its reason), `pipeline.py` writes `library: N photos, M videos` (the cue that analysis starts), then one line per video and the planned and written counts, and `cli.py` writes `report: <path>` when the run is done. `runlog.py` turns those lines into phase, progress and time left; a test runs a real pipeline pass and feeds its log back through `runlog.py`, so the writer and the reader cannot drift apart. Whether a run is live comes from the run lock, so an unfinished log without a lock reads as "stopped early".
+
+Runs started from the page are the real `videotag run` command in a separate process (`launcher.py`), never a call into the pipeline: the GUI does not hold the run lock, and the run outlives the page.
+
+### Accounts and the saved data
+
+The state file, the caches, the reports and the log hold ids that only mean something in one account's library, so `state/account.json` records whose they are. `main()` calls `claim_data` right after loading the login and before any call to the NAS, for every command that logs in: data with no owner is claimed by the first login that uses it, data that belongs to someone else stops the command (this matters most for `undo`, which acts on the ids in the state file, and for the photo cache, which is reused by item id). `switch_data` moves `state/`, `reports/`, `cache/` and `logs/` under `accounts/<name>-<hash>/` and brings the target's back, all or nothing (a failed move puts the earlier ones back). Paths in the code stay fixed, which is why folders are swapped rather than pointing the data home somewhere else per account: a running dashboard and every module keep reading the same places. `credentials set`, `credentials migrate` and the dashboard all go through `apply_login`, and the tests replace `default_layout()` so no test can reach the real data folder.
 
 ## The data folder
 
@@ -112,10 +128,12 @@ state/state.json      what was written, rejections, confirmations (back this up)
 state/faces/          per-video faces (rebuildable)
 state/describe/       per-video descriptions (rebuildable)
 state/run.lock        exists only while a run is active
+state/account.json    which account this data belongs to
 cache/                reference photos and cover crops downloaded from Photos (rebuildable)
 models/               face models (downloaded on first use)
 logs/videotag.log     rotating, 1 MB x 4
 reports/              one JSON per run
+accounts/<name>-<id>/ the data of accounts you switched away from (state, reports, cache, logs)
 ```
 
 ## Safety properties
@@ -123,7 +141,7 @@ reports/              one JSON per run
 - **Dry run by default**; writes need `--apply`, and each kind is capped by `--max-writes`.
 - **Idempotent**: a second run with nothing new changes nothing (verified live, repeatedly).
 - **Reversible**: `undo` removes everything recorded, and only that.
-- **No overlapping runs**: an exclusive lock file, ignored after 6 hours.
+- **No overlapping runs**: an exclusive lock file that a live run refreshes every minute (and that records when the run took it); one nobody has refreshed for 6 hours is ignored, so a run of any length keeps its lock.
 - **Stops instead of guessing**: an unreadable state file aborts the run, because guessing "empty" could re-add things the user rejected.
 - **Failures are contained**: one broken video, or a broken description model, is logged and skipped; the rest of the run continues.
 

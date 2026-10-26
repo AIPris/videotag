@@ -1,4 +1,4 @@
-"""Command line: run, undo, refs, calibrate, credentials, doctor."""
+"""Command line: run, undo, refs, calibrate, credentials, doctor, gui."""
 import argparse
 import json
 import logging
@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
+from .accounts import AccountError, claim_data
 from .admin import (
     cmd_credentials_delete,
     cmd_credentials_migrate,
@@ -17,7 +18,7 @@ from .admin import (
 )
 from .albums import delete_albums
 from .calibration import calibrate_person, leave_one_out
-from .config import LOG_DIR, REPORTS_DIR
+from .config import DEFAULT_MAX_WRITES, DEFAULT_PORT, LOG_BACKUPS, LOG_FILE, LOG_MAX_BYTES, REPORTS_DIR
 from .credentials import CredentialError, load_credentials
 from .describe import Describer
 from .descriptions import delete_descriptions
@@ -28,19 +29,17 @@ from .lock import AlreadyRunning, single_run
 from .matcher import DEFAULT_MATCH, DEFAULT_MIN_FRAMES
 from .pipeline import RunOptions, run
 from .references import build_references
+from .runlog import started_message
 from .state import State, StateError
 from .synology import PhotosClient, SynologyError
 from .tagging import undo_all
-
-LOG_FILE = LOG_DIR / "videotag.log"
-DEFAULT_MAX_WRITES = 100
 
 
 def _setup_logging() -> None:
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=[
         logging.StreamHandler(),
-        RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"),
+        RotatingFileHandler(LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS, encoding="utf-8"),
     ])
 
 
@@ -110,6 +109,12 @@ def cmd_calibrate(client: PhotosClient, args) -> None:
             print(f"video control              : {control.decision.value} ({best}, {control.hit_frames} matching frames)")
 
 
+def cmd_gui(client, args) -> int:
+    from .dashboard import Sources
+    from .gui import serve  # imported here so that headless runs never load the web server
+    return serve(Sources(), args.port, not args.no_browser)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="videotag", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate = commands.add_parser("calibrate", help="check the matcher against known data")
     calibrate.add_argument("--fps", type=float, default=2.0, help="frames sampled per second of video")
     calibrate.set_defaults(run=cmd_calibrate)
+
+    gui = commands.add_parser("gui", help="optional local web dashboard: progress, results, health (runs fine without it)")
+    gui.add_argument("--port", type=int, default=DEFAULT_PORT, help="port on 127.0.0.1 (0 picks a free one)")
+    gui.add_argument("--no-browser", action="store_true", help="do not open the page in your browser")
+    gui.set_defaults(run=cmd_gui, needs_client=False)
 
     commands.add_parser("doctor", help="check that everything an unattended run needs is in place"
                         ).set_defaults(run=cmd_doctor, needs_client=False)
@@ -156,15 +166,22 @@ def main(argv: list[str] | None = None) -> int:
         _setup_logging()
     try:
         with single_run() if unattended else nullcontext():
+            if args.command == "run":  # before the login, so a run that dies early still shows up as a stopped run
+                logging.getLogger("videotag").info(started_message(args.apply))
             if not getattr(args, "needs_client", True):
                 return int(args.run(None, args) or 0)
             credentials, _ = load_credentials()
+            claim_data(credentials)  # before any call to the NAS: the saved data must belong to this account
             with PhotosClient(credentials) as client:
                 return int(args.run(client, args) or 0)
     except AlreadyRunning as exc:
         print(f"skipped: {exc}")
         return 2
-    except (SynologyError, StateError, CredentialError) as exc:
+    except (SynologyError, StateError, CredentialError, AccountError) as exc:
         logging.getLogger("videotag").error("%s", exc)
         print(f"error: {exc}")
         return 1
+    except Exception as exc:  # noqa: BLE001 - an unattended run's crash must reach the log, not only a terminal nobody watches
+        if unattended:
+            logging.getLogger("videotag").exception("%s crashed: %s: %s", args.command, type(exc).__name__, exc)
+        raise

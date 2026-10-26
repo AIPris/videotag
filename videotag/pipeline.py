@@ -1,21 +1,21 @@
 """One unattended pass: read Photos, match every video, learn from edits, write tags, faces and albums."""
 import logging
-import subprocess
+from contextlib import closing
 from dataclasses import dataclass
 
-from . import descache, facecache
 from .albums import current_albums, execute_albums, plan_album_changes
+from .analysis import analyse_videos
 from .calibration import person_models
-from .describe import FRAMES, Describer, Description, evenly
+from .describe import Describer
 from .descriptions import execute_descriptions, plan_description_changes, sync_description_feedback
 from .facelinks import execute_faces, plan_face_changes, sync_face_feedback, verify_links
 from .faces import FaceEngine
 from .library import load_library
 from .matcher import best_sighting, match_video
 from .references import build_references
-from .scanner import frame_crop, video_frames
+from .scanner import frame_crop
 from .state import State
-from .synology import PhotosClient, SynologyError
+from .synology import PhotosClient
 from .tagging import confident_videos, execute, plan_tag_changes, sync_feedback
 
 log = logging.getLogger("videotag")
@@ -31,37 +31,6 @@ class RunOptions:
     describe: bool = True           # also write bilingual descriptions (needs the vision-language model)
 
 
-def _describe(describer: Describer, video: dict, frames) -> Description | None:
-    """One description, cached. A model or GPU failure is logged and not cached, so it is tried again next run."""
-    key = descache.cache_key(video)
-    try:
-        description = describer.describe(evenly(frames, FRAMES))
-    except Exception as exc:  # noqa: BLE001 - a broken model must not stop the people pipeline
-        log.error("describing %s failed: %s: %s", video["id"], type(exc).__name__, exc)
-        return None
-    descache.save(video["id"], key, description)
-    return description
-
-
-def _analyse(client: PhotosClient, engine: FaceEngine, describer: Describer | None, video: dict, fps: float):
-    """The faces and the description of one video, from the caches where possible.
-
-    The video is downloaded at most once, and only if something is missing from the caches.
-    """
-    face_key = facecache.cache_key(video, fps)
-    faces = facecache.load(video["id"], face_key)
-    described, description = descache.load(video["id"], descache.cache_key(video)) if describer else (True, None)
-    if faces is not None and described:
-        return faces, description
-    with video_frames(client, video, fps) as frames:
-        if faces is None:
-            faces = [engine.faces(frame) for frame in frames]
-            facecache.save(video["id"], face_key, faces)
-        if not described:
-            description = _describe(describer, video, frames)
-    return faces, description
-
-
 def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, options: RunOptions,
         state: State) -> list[dict]:
     """Returns one report row per video. A dry run changes nothing in Photos and saves no state."""
@@ -71,6 +40,7 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
     for model in models:
         log.info("%s: %d references, threshold %.3f, confident tags %s", model.name, len(model.references),
                  model.threshold, "allowed" if model.can_auto else "not allowed (suggestions only)")
+    log.info("library: %d photos, %d videos", len(library.photos), len(library.videos))  # cue for runlog.py: analysis starts
 
     people = {model.person_id: model.name for model in models}
     sync_feedback(state, library.videos, people)
@@ -79,27 +49,28 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
     sync_description_feedback(state, library.videos)
 
     rows, matches, frame_faces_by_video, descriptions = [], {}, {}, {}
-    for video in library.videos:
-        row = {"video_id": video["id"], "filename": video["filename"]}
-        try:
-            frame_faces, description = _analyse(client, engine, describer, video, options.fps)
-        except (SynologyError, RuntimeError, subprocess.CalledProcessError) as exc:
-            log.error("%s %s: %s", video["id"], video["filename"], exc)
-            rows.append({**row, "error": str(exc)})
-            continue
-        frame_faces_by_video[video["id"]] = frame_faces
-        if description is not None:
-            descriptions[video["id"]] = description
-        matches[video["id"]] = match_video(frame_faces, models, options.min_frames)
-        rows.append({**row, "frames": len(frame_faces), "faces": sum(len(f) for f in frame_faces),
-                     "description": description.summary_en if description else None,
-                     "place": description.place if description else None,
-                     "matches": [{"person_id": m.person_id, "name": m.name, "best": m.best,
-                                  "hit_frames": m.hit_frames, "decision": m.decision.value}
-                                 for m in matches[video["id"]]]})
-        log.info("%s %s frames=%d faces=%d | %s", video["id"], video["filename"][:40], rows[-1]["frames"], rows[-1]["faces"],
-                 " ".join(f"{m.name}={'-' if m.best is None else f'{m.best:.2f}'}/{m.hit_frames}:{m.decision.value}"
-                          for m in matches[video["id"]]))
+    with closing(analyse_videos(client, engine, describer, library.videos, options.fps)) as outcomes:
+        for outcome in outcomes:
+            video = outcome.video
+            row = {"video_id": video["id"], "filename": video["filename"]}
+            if outcome.error is not None:
+                log.error("%s %s: %s", video["id"], video["filename"], outcome.error)
+                rows.append({**row, "error": str(outcome.error)})
+                continue
+            frame_faces, description = outcome.faces, outcome.description
+            frame_faces_by_video[video["id"]] = frame_faces
+            if description is not None:
+                descriptions[video["id"]] = description
+            matches[video["id"]] = match_video(frame_faces, models, options.min_frames)
+            rows.append({**row, "frames": len(frame_faces), "faces": sum(len(f) for f in frame_faces),
+                         "description": description.summary_en if description else None,
+                         "place": description.place if description else None,
+                         "matches": [{"person_id": m.person_id, "name": m.name, "best": m.best,
+                                      "hit_frames": m.hit_frames, "decision": m.decision.value}
+                                     for m in matches[video["id"]]]})
+            log.info("%s %s frames=%d faces=%d | %s", video["id"], video["filename"][:40], rows[-1]["frames"], rows[-1]["faces"],
+                     " ".join(f"{m.name}={'-' if m.best is None else f'{m.best:.2f}'}/{m.hit_frames}:{m.decision.value}"
+                              for m in matches[video["id"]]))
 
     actions = plan_tag_changes(state, library.videos, matches)
     log.info("%d tag change(s) planned (%d confident, %d suggestions, %d removals)", len(actions),

@@ -54,6 +54,17 @@ Videos themselves are downloaded to a temporary folder, processed and deleted ag
 - **One-time downloads**: the OpenCV face models from `github.com/opencv/opencv_zoo`, and the description model `Qwen/Qwen3-VL-4B-Instruct` from Hugging Face (about 9 GB), plus Python packages at install time.
 - Nothing else: no telemetry, no cloud AI service. Faces, frames and descriptions are processed locally.
 
+## The dashboard
+
+`videotag gui` (optional) is a small web server inside your own Python process. It never sees the NAS password: it reads the data folder, and anything that needs the NAS (the health check, a run) uses the same credential store as the command line, in the process that does the work.
+
+- **Loopback only.** It listens on `127.0.0.1`, never on a network address, and there is no option to change that.
+- **Other websites cannot read it.** A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` is refused (this stops DNS rebinding), responses carry no CORS headers, and the page is sent with `Cross-Origin-Resource-Policy: same-origin`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and a Content-Security-Policy of `default-src 'self'` with `frame-ancestors 'none'` (no inline script, no external resources, no framing).
+- **Other websites cannot start a run.** Every POST needs a random per-session token that only the served page contains, plus a matching `Origin` when the browser sends one. Starting an apply run needs a click on a confirmation dialog; `undo` is not available from the page.
+- **No injection from your data.** File names, descriptions and log lines (descriptions come from a model and can be edited in Photos) are put into the page as text, never as HTML.
+- **The account form handles a password.** The password you type travels once, in the body of a request to `127.0.0.1` (HTTP on the loopback interface, so it never leaves the PC), is checked against the NAS over HTTPS, and is then stored in the Windows Credential Manager exactly as `videotag credentials set` does. The server never writes it to a log, a file or an error message and never sends it back (the account view shows only the address and the account name). The field is `type="password"` with `autocomplete="new-password"` so the browser does not offer to save it, and it is emptied after every attempt and when the dialog closes. Only `https://` addresses are accepted, and certificates are always verified. The form is disabled while the login comes from environment variables, because those would override the stored one.
+- **What it exposes** to anyone who can use your browser session: the file names and descriptions of your videos, who was matched, and the log. Treat the open tab like the photos themselves.
+
 ## Reporting a problem
 
 If you find a security issue, do not open a public issue with details; contact the repository owner directly.

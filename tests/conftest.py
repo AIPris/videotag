@@ -3,6 +3,7 @@ import pytest
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
+from videotag import accounts
 from videotag.credentials import ENV_NAMES
 
 
@@ -37,3 +38,13 @@ def isolated_secrets(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     yield memory
     keyring.set_keyring(previous)
+
+
+@pytest.fixture(autouse=True)
+def isolated_data_home(monkeypatch, tmp_path_factory):
+    """Whatever a test does with "the" data home, it is a temporary one: no test can move the real state, caches or log."""
+    home = tmp_path_factory.mktemp("data-home")
+    layout = accounts.Layout(state=home / "state", reports=home / "reports", cache=home / "cache", logs=home / "logs",
+                             parked=home / "accounts")
+    monkeypatch.setattr(accounts, "default_layout", lambda: layout)
+    return layout

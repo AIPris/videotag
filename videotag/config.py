@@ -21,3 +21,9 @@ MODELS_DIR = HOME / "models"    # face detection and recognition models
 STATE_DIR = HOME / "state"      # what the tool wrote and what the user did about it, plus per-video caches
 REPORTS_DIR = HOME / "reports"  # one JSON report per run
 LOG_DIR = HOME / "logs"
+LOG_FILE = LOG_DIR / "videotag.log"
+LOG_MAX_BYTES = 1_000_000  # the log rotates at this size ...
+LOG_BACKUPS = 3            # ... and keeps this many older files (videotag.log.1 is the newest of them)
+
+DEFAULT_MAX_WRITES = 100  # most changes of each kind a run writes unless told otherwise
+DEFAULT_PORT = 8765  # where `videotag gui` listens on 127.0.0.1
