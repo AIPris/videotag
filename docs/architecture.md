@@ -19,11 +19,11 @@
 
 ![One run](diagrams/run-pipeline/run-pipeline.png)
 
-1. **load_library**: all photos and videos with their tags, people and descriptions.
-2. **build_references**: for every *named* person, collect known faces (see below).
-3. **person_models**: one model per person with its own similarity threshold.
+1. **load_library**: all photos and videos with their tags, people and descriptions. A dry run that was given an album checks it now, before the long step below.
+2. **build_references**: for every *named* person, collect known faces (see below). The faces found in each photo are kept per photo (`state/reffaces/`), so only new or changed photos are read; the phase writes a counter (`references: 600 of 2432 photos`) to the log.
+3. **person_models**: one model per person with its own similarity threshold. The accuracy report (`reports/accuracy.json`) is worked out here from the same data.
 4. **sync_feedback**: compare what the tool wrote last time with what is in Photos now, to learn what the user rejected or confirmed.
-5. **analyse_videos**: faces and description of every video, from the caches where possible. The next videos are fetched and read on a helper thread while the vision-language model describes the current one (see below).
+5. **analyse_videos**: faces and description of every video, from the caches where possible. A dry run may look at a slice only (`--limit`, `--new-only`, `--album`); a real run always covers the whole library. The next videos are fetched and read on a helper thread while the vision-language model describes the current one (see below). Each result is also appended to `reports/current-run.jsonl` as it is made, which is what the dashboard shows while the run is going.
 6. **match_video**: who is in the video.
 7. **plan_***: four pure planners compute the changes for tags, People-page face links, descriptions and albums. Nothing has been written yet.
 8. **--apply?** Without it the plan is only logged. With it, the changes are executed (capped by `--max-writes` per kind), the state is saved after each write, and a JSON report is written.
@@ -32,7 +32,13 @@
 
 ![Video analysis](diagrams/video-analysis/video-analysis.png)
 
-Downloading and detecting are the slow parts, matching is cheap. Per video the tool caches the faces (embedding and position, `state/faces/<id>.npz`) and the description (`state/describe/<id>.json`), keyed by file size, modification time, sampling rate and model/prompt version. A changed reference set or threshold therefore never needs the videos again, and an unchanged library costs seconds per run. The video is downloaded at most once per run, to a temporary folder that is deleted afterwards.
+Downloading and detecting are the slow parts, matching is cheap. Per video the tool caches the faces (embedding and position, `state/faces/<id>.npz`) and the description (`state/describe/<id>.json`), keyed by file size, modification time and model/prompt version. A changed reference set or threshold therefore never needs the videos again, and an unchanged library costs seconds per run. The video is downloaded at most once per run, to a temporary folder that is deleted afterwards.
+
+**Sampling rules.** How a video is cut into frames is a *rule*, stored inside the saved faces. `thorough` is two frames a second throughout (every result made before presets existed used it, and its ffmpeg call is unchanged, so those results are still read as they are). `balanced` and `fast` keep two a second for the first 30 s and then one every 2 s or 4 s, in two ffmpeg passes; a clip that ends inside the first 30 s is cut exactly as under `thorough`. A preset only applies to videos without a saved result, so changing it never redoes the old ones (`--reanalyse` does that on purpose). A frame number only means something under the rule that counted it, so the face crop written to Photos and the evidence crops are cut under the rule stored with the faces, not the one in use now, and the description model's six frames are spread evenly in time whatever the rule.
+
+**Twins.** A file that sits in the library under two ids (same name, size and time) is fetched, cut and described once; the other id gets a copy of the result, saved under its own id so that it counts as analysed from then on. Rows of the report say which video a copy shares (`twin_of`), and the dashboard lists them so you can tidy up in Photos. The tool never deletes a video.
+
+**Evidence.** For every person a video matches, the best few faces that counted as hits for that person are cut out of the frames and kept (`state/evidence/<video>/<person>-<n>.jpg`). They are made wherever the frames are already in hand: when the video is analysed, and once for a cached video that matches someone but has no crops yet (a cached video that is not downloaded is never downloaded for this). If the crops cannot be cut for a video's faces (the frames do not line up, or a crop fails) that is remembered in `skipped.txt` in its folder, so the video is not fetched on every run; a failed download is not remembered, and it never costs a cached video its results. They stay on this PC.
 
 Fetching (network), cutting frames and finding faces (CPU), and describing (GPU) use different hardware, so a helper thread prepares up to eight videos ahead while the calling thread runs the model. The helper keeps only the six frames the model needs, so running ahead costs next to nothing on disk, and only the calling thread uses the model. The results are the same as handling one video at a time, and they come back in library order. A video that cannot be fetched or cut is skipped with an error row; any other error stops the run at that video.
 
@@ -101,7 +107,10 @@ Photos search matches any part of the text, so the block carries **no label word
 | `references.py`, `calibration.py`, `matcher.py`, `assignment.py` | Who is in a video: references, thresholds, matching, group-photo assignment |
 | `synology.py` | The Photos web API client; errors never contain URLs or secrets |
 | `faces.py`, `describe.py`, `scanner.py`, `frames.py` | Adapters: OpenCV, the vision-language model, ffmpeg |
-| `state.py`, `facecache.py`, `descache.py`, `lock.py` | Files on disk |
+| `state.py`, `facecache.py`, `descache.py`, `refcache.py`, `lock.py` | Files on disk: the state, the per-video faces and descriptions, the per-photo reference faces, the run lock |
+| `sampling.py`, `slices.py`, `settings.py` | The frame-rate rules and presets, which videos a dry run looks at, the saved settings (which refuse per-run choices) |
+| `evidence.py`, `accuracy.py`, `spotcheck.py`, `estimates.py` | Face crops of matches, the accuracy report, the random spot-check sample, and what a preset would save on this library |
+| `live.py` | The rows of the run in progress, one JSON line each, for the dashboard |
 | `credentials.py`, `config.py` | Where the login comes from; where files go |
 | `accounts.py` | Whose data is on disk, the guard against mixing two accounts, and switching (setting data aside and bringing it back) |
 | `runlog.py`, `dashboard.py` | The optional GUI's read side: the run log as a progress report, and the reports, state and description cache joined into one view (no NAS, no writes) |
@@ -111,7 +120,7 @@ Design rules the code follows: planning is pure and separate from executing (so 
 
 ### The optional dashboard
 
-`videotag gui` is an observer. A run never calls into it and a headless run never imports it (`cli.py` imports `gui` only inside the `gui` command, and a test pins that). It reads the data folder, and the one interface between a run and anyone watching is the log: `cli.py` writes `run started: dry run|apply` before it even logs in to the NAS (so a run that dies early still shows up as stopped, and an unexpected crash of an unattended command is logged with its reason), `pipeline.py` writes `library: N photos, M videos` (the cue that analysis starts), then one line per video and the planned and written counts, and `cli.py` writes `report: <path>` when the run is done. `runlog.py` turns those lines into phase, progress and time left; a test runs a real pipeline pass and feeds its log back through `runlog.py`, so the writer and the reader cannot drift apart. Whether a run is live comes from the run lock, so an unfinished log without a lock reads as "stopped early".
+`videotag gui` is an observer. A run never calls into it and a headless run never imports it (`cli.py` imports `gui` only inside the `gui` command, and a test pins that). It reads the data folder, and the one interface between a run and anyone watching is the log: `cli.py` writes `run started: dry run|apply` before it even logs in to the NAS (so a run that dies early still shows up as stopped, and an unexpected crash of an unattended command is logged with its reason), `pipeline.py` writes `library: N photos, M videos` (the cue that analysis starts), then one line per video and the planned and written counts, and `cli.py` writes `report: <path>` when the run is done. During the reference phase it writes `references: D of T photos`, and a dry run with a slice writes `slice: N of M videos`; neither line starts with digits, because a line that does is counted as a video. `runlog.py` turns those lines into phase, progress and time left; a test runs a real pipeline pass and feeds its log back through `runlog.py`, so the writer and the reader cannot drift apart. Whether a run is live comes from the run lock, so an unfinished log without a lock reads as "stopped early".
 
 Runs started from the page are the real `videotag run` command in a separate process (`launcher.py`), never a call into the pipeline: the GUI does not hold the run lock, and the run outlives the page.
 
@@ -125,14 +134,17 @@ The state file, the caches, the reports and the log hold ids that only mean some
 
 ```
 state/state.json      what was written, rejections, confirmations (back this up)
-state/faces/          per-video faces (rebuildable)
+state/faces/          per-video faces and the sampling rule that made them (rebuildable)
 state/describe/       per-video descriptions (rebuildable)
+state/reffaces/       per-photo faces of the named people's photos (rebuildable)
+state/evidence/       face crops of the matches, for the dashboard (rebuildable, never uploaded)
 state/run.lock        exists only while a run is active
 state/account.json    which account this data belongs to
 cache/                reference photos and cover crops downloaded from Photos (rebuildable)
 models/               face models (downloaded on first use)
 logs/videotag.log     rotating, 1 MB x 4
-reports/              one JSON per run
+reports/              one JSON per run, plus accuracy.json (latest run) and current-run.jsonl (while a run is going)
+settings.json         the saved preset and describe choice (optional)
 accounts/<name>-<id>/ the data of accounts you switched away from (state, reports, cache, logs)
 ```
 
@@ -148,6 +160,7 @@ accounts/<name>-<id>/ the data of accounts you switched away from (state, report
 ## Known limits and ideas
 
 - The face-link calls are undocumented and could change with a Photos update.
-- Every run re-detects faces in the reference photos of all named people; for a library with thousands of reference photos those embeddings should be cached.
+- The reference photos are still downloaded in full once (`cache/photos`); only their faces are kept per photo. Keeping the faces and dropping the photos would save the disk space.
+- A cached video that matches someone is downloaded once more, the first run after crops were introduced, to cut its evidence.
 - The description model needs a GPU, so a container on the NAS could only do the people part (`--no-describe`) unless the NAS has a GPU.
 - Topics, objects and places come from a small model and are written as free text, not as a controlled vocabulary.

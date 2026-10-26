@@ -8,7 +8,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import __version__
+from . import __version__, config, settings
 from .accounts import Identity, apply_login, verify_login
 from .config import HOME, MODELS_DIR
 from .credentials import (
@@ -20,6 +20,7 @@ from .credentials import (
     parse_legacy_file,
     vault_name,
 )
+from .settings import SettingsError
 from .state import State, StateError
 from .synology import PhotosClient, SynologyError
 
@@ -166,6 +167,15 @@ def _check_state() -> Check:
                                      f"{len(state.descriptions)} descriptions, {len(state.albums)} albums on record")
 
 
+def _check_settings() -> Check:
+    try:
+        chosen = settings.load()
+    except SettingsError as exc:
+        return Check("settings", "fail", str(exc))
+    where = "saved" if config.SETTINGS_FILE.exists() else "no settings file, the defaults"
+    return Check("settings", "ok", f"{where}: preset {chosen.preset}, descriptions {'on' if chosen.describe else 'off'}")
+
+
 def _check_task() -> Check:
     if sys.platform != "win32":
         return Check("scheduled task", "warn", "not checked on this platform")
@@ -180,7 +190,7 @@ def run_checks() -> list[Check]:
     checks.append(credentials_check)
     if credentials is not None:
         checks.append(_check_nas(credentials))
-    checks += [_check_face_models(), _check_description_model(), _check_state(), _check_task()]
+    checks += [_check_face_models(), _check_description_model(), _check_state(), _check_settings(), _check_task()]
     return checks
 
 

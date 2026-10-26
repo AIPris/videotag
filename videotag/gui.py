@@ -10,6 +10,7 @@ internet. It listens on the loopback address and defends itself against other we
 import hmac
 import json
 import logging
+import re
 import secrets
 import sys
 import threading
@@ -19,12 +20,14 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import settings
 from .accounts import (
     AccountBusy,
     AccountError,
     Identity,
     Layout,
     apply_login,
+    claim_data,
     default_layout,
     describe_account,
     is_busy,
@@ -32,10 +35,25 @@ from .accounts import (
 )
 from .admin import run_checks
 from .config import DEFAULT_MAX_WRITES, DEFAULT_PORT
-from .credentials import CredentialError, Credentials, clean_url
-from .dashboard import TIME_FORMAT, Sources, data_version, history, library_view, log_tail, run_status
+from .credentials import CredentialError, Credentials, clean_url, load_credentials
+from .dashboard import (
+    TIME_FORMAT,
+    Sources,
+    accuracy_view,
+    data_version,
+    history,
+    library_view,
+    log_tail,
+    run_status,
+    settings_view,
+    spot_check,
+)
 from .launcher import LaunchError, start_run
 from .lock import AlreadyRunning
+from .settings import Settings, SettingsError
+from .slices import own_albums
+from .state import State, StateError
+from .synology import PhotosClient, SynologyError
 
 log = logging.getLogger("videotag")
 
@@ -45,8 +63,11 @@ MAX_BODY = 4096
 DRAIN_LIMIT = 1_000_000  # of an oversized request body, read this much so the refusal reaches the client
 PAGES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
-API_VERSION = 2  # the page and the server must agree on this; bump it with any change the page cannot work without
+API_VERSION = 3  # the page and the server must agree on this; bump it with any change the page cannot work without
 MAX_LOGIN_FIELD = 512
+MAX_SPOT_CHECK = 20  # videos per person and group that one spot-check may ask for
+SPOT_CHECK_DEFAULT = 5
+CROP_PATH = re.compile(r"^/evidence/(\d+)/(\d+-\d+\.jpg)$")  # exactly what evidence.py writes, so no path can leave its folder
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -61,13 +82,21 @@ def _health_checks() -> list[dict]:
     return [asdict(check) for check in run_checks()]
 
 
+def _list_albums() -> list[dict]:
+    """The user's own albums, from the NAS. The only thing the dashboard asks the NAS for besides checking a login."""
+    credentials, _ = load_credentials()
+    claim_data(credentials)  # the saved data must belong to this login, as for every command that logs in
+    with PhotosClient(credentials) as client:
+        return [{"id": album["id"], "name": album.get("name", "")} for album in own_albums(client, State.load())]
+
+
 class GuiServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port: int, src: Sources, assets: Path, doctor, launch, verify, layout: Layout, clock):
+    def __init__(self, port: int, src: Sources, assets: Path, doctor, launch, verify, layout: Layout, clock, albums):
         super().__init__(("127.0.0.1", port), Handler)
         self.src, self.assets, self.doctor, self.launch, self.clock = src, assets, doctor, launch, clock
-        self.verify, self.layout = verify, layout
+        self.verify, self.layout, self.albums = verify, layout, albums
         self.token = secrets.token_urlsafe(24)
         self.health: dict = {"checks": None, "at": None}
         self.health_busy = threading.Lock()
@@ -139,11 +168,15 @@ class Handler(BaseHTTPRequestHandler):
         src, now = self.server.src, self.server.clock()
         api = {"/api/status": lambda: {"api": API_VERSION, "version": data_version(src), "now": now.strftime(TIME_FORMAT),
                                        "status": run_status(src, now), "log": log_tail(src)},
-               "/api/library": lambda: library_view(src), "/api/history": lambda: history(src),
-               "/api/doctor": lambda: self.server.health,
+               "/api/library": lambda: library_view(src, now), "/api/history": lambda: history(src),
+               "/api/doctor": lambda: self.server.health, "/api/settings": lambda: self._settings(now),
+               "/api/accuracy": lambda: accuracy_view(src),
                "/api/account": lambda: {**describe_account(self.server.layout), "busy": is_busy(self.server.layout)}}
         if path in api:
             return self._json(200, api[path]())
+        crop = CROP_PATH.match(path)
+        if crop:
+            return self._crop(src.evidence_dir / crop[1] / crop[2])
         if path not in PAGES:
             return self._json(404, {"error": "not found"})
         name, content_type = PAGES[path]
@@ -163,7 +196,58 @@ class Handler(BaseHTTPRequestHandler):
             return self._start_run()
         if path == "/api/account":
             return self._change_account()
+        if path == "/api/settings":
+            return self._change_settings()
+        if path == "/api/albums":
+            return self._list_albums()
+        if path == "/api/spotcheck":
+            return self._spot_check()
         self._json(404, {"error": "not found"})
+
+    def _crop(self, file: Path) -> None:
+        try:
+            data = file.read_bytes()
+        except OSError:
+            return self._json(404, {"error": "not found"})
+        self._send(200, data, "image/jpeg")
+
+    def _spot_check(self) -> None:
+        data = self._read_json()
+        if data is None:
+            return
+        count = data.get("count", SPOT_CHECK_DEFAULT)
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_SPOT_CHECK:
+            return self._json(400, {"error": f"count must be a whole number from 1 to {MAX_SPOT_CHECK}"})
+        self._json(200, spot_check(self.server.src, count))
+
+    def _settings(self, now: datetime) -> dict:
+        """The saved settings and what is needed to choose them. A file that cannot be read is reported, not raised."""
+        try:
+            saved, problem = settings.load(), None
+        except SettingsError as exc:
+            saved, problem = Settings(), str(exc)
+        return {**settings_view(self.server.src, saved, now), "problem": problem}
+
+    def _change_settings(self) -> None:
+        data = self._read_json()
+        if data is None:
+            return
+        try:
+            try:
+                current = settings.load()
+            except SettingsError:
+                current = Settings()  # a file nobody can read is replaced by what the page sends
+            settings.save(settings.from_dict({**asdict(current), **data}))
+        except SettingsError as exc:
+            return self._json(400, {"error": str(exc)})
+        self._json(200, self._settings(self.server.clock()))
+
+    def _list_albums(self) -> None:
+        try:
+            albums = self.server.albums()
+        except (AccountError, CredentialError, StateError, SynologyError) as exc:
+            return self._json(400, {"error": str(exc)})
+        self._json(200, albums)
 
     def _run_health_check(self) -> None:
         if not self.server.health_busy.acquire(blocking=False):
@@ -213,8 +297,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         options = {"apply": data.get("apply", False), "max_writes": data.get("max_writes", DEFAULT_MAX_WRITES),
                    "describe": data.get("describe", True)}
-        if not isinstance(options["apply"], bool) or not isinstance(options["describe"], bool):
-            return self._json(400, {"error": "apply and describe must be true or false"})
+        options.update({name: data[name] for name in ("preset", "limit", "new_only", "album", "reanalyse") if name in data})
+        yes_no = ("apply", "describe", "new_only", "reanalyse")
+        if not all(isinstance(options[name], bool) for name in yes_no if name in options):
+            return self._json(400, {"error": "apply, describe, new_only and reanalyse must be true or false"})
         try:
             self.server.launch(self.server.src, self.server.clock(), **options)
         except AlreadyRunning as exc:
@@ -241,8 +327,8 @@ def _login_from(data: dict) -> Credentials | str:
 
 
 def make_server(src: Sources, port: int, *, assets: Path = ASSETS_DIR, doctor=_health_checks, launch=start_run,
-                verify=verify_login, layout: Layout | None = None, clock=datetime.now) -> GuiServer:
-    return GuiServer(port, src, assets, doctor, launch, verify, layout or default_layout(), clock)
+                verify=verify_login, layout: Layout | None = None, clock=datetime.now, albums=_list_albums) -> GuiServer:
+    return GuiServer(port, src, assets, doctor, launch, verify, layout or default_layout(), clock, albums)
 
 
 def serve(src: Sources, port: int = DEFAULT_PORT, open_browser: bool = True) -> int:

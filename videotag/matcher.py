@@ -62,6 +62,32 @@ def best_sighting(frame_faces: list[list], model: PersonModel) -> Sighting | Non
     return best
 
 
+def claim(embedding: np.ndarray, models: list[PersonModel]) -> tuple[int | None, list[float]]:
+    """Which person a face counts for: the one it resembles most, if that reaches their threshold (else None).
+    Also the similarity to every person, in the order of `models`."""
+    similarities = [face_similarity(embedding, model.references) for model in models]
+    winner = int(np.argmax(similarities))
+    return (winner if similarities[winner] >= models[winner].threshold else None), similarities
+
+
+EVIDENCE_COUNT = 3  # how many faces of a person are kept to show why a video matched
+
+
+def hit_sightings(frame_faces: list[list], models: list[PersonModel], index: int,
+                  count: int = EVIDENCE_COUNT) -> list[Sighting]:
+    """The faces that made `models[index]` a hit, best first, at most one per frame and `count` in all.
+
+    Only a face the person won counts, as in `match_video`: the most similar face in a video can belong to somebody
+    else (a sibling), and that would be misleading evidence."""
+    best_in_frame = []
+    for frame, faces in enumerate(frame_faces):
+        hits = [Sighting(frame, face.box, face_similarity(face.embedding, models[index].references)) for face in faces
+                if claim(face.embedding, models)[0] == index]
+        if hits:
+            best_in_frame.append(max(hits, key=lambda sighting: sighting.similarity))
+    return sorted(best_in_frame, key=lambda sighting: -sighting.similarity)[:count]
+
+
 def match_video(frame_faces: list[list], models: list[PersonModel],
                 min_frames: int = DEFAULT_MIN_FRAMES) -> list[PersonMatch]:
     """Score one video against every known person.
@@ -76,11 +102,10 @@ def match_video(frame_faces: list[list], models: list[PersonModel],
     for faces in frame_faces:
         frame_hits = set()
         for face in faces:
-            similarities = [face_similarity(face.embedding, model.references) for model in models]
+            winner, similarities = claim(face.embedding, models)
             for index, similarity in enumerate(similarities):
                 best[index] = similarity if best[index] is None else max(best[index], similarity)
-            winner = int(np.argmax(similarities))
-            if similarities[winner] >= models[winner].threshold:
+            if winner is not None:
                 frame_hits.add(winner)
         for index in frame_hits:
             hits[index] += 1

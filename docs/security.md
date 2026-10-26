@@ -41,10 +41,13 @@ Everything lives in one data folder (`%LOCALAPPDATA%\videotag`, or `VIDEOTAG_HOM
 |---|---|---|
 | `state/state.json` | The tags, face links, descriptions and albums the tool created, and your rejections and confirmations | Low (ids and names) |
 | `state/faces/` | Face embeddings and positions found in each video | **Biometric data**: treat like the photos themselves. Safe to delete, it is rebuilt |
+| `state/reffaces/` | Face embeddings found in the photos of the people you named | **Biometric data**, like `state/faces/`. Safe to delete, it is rebuilt (the next run is slow again) |
+| `state/evidence/` | The best few face crops of each match, as pictures (`<video>/<person>-<n>.jpg`), so the dashboard can show why a video matched | **Pictures of faces** cut out of your videos. They never leave this PC and are never uploaded to Photos; a video without a match keeps none. Safe to delete |
 | `state/describe/` | The generated description text per video | Describes your videos; safe to delete |
 | `cache/` | Original reference photos and cover crops downloaded from Photos | **Personal photos**. Safe to delete |
 | `models/` | Face detection and recognition models | None |
-| `logs/`, `reports/` | What each run did: file names, scores, descriptions | Describes your videos |
+| `logs/`, `reports/` | What each run did: file names, scores, descriptions. `reports/current-run.jsonl` holds the rows of the run in progress and is removed when its report is saved; `reports/accuracy.json` holds the accuracy figures of the latest run | Describes your videos |
+| `settings.json` | The preset and whether videos are described: nothing else, by design | None |
 
 Videos themselves are downloaded to a temporary folder, processed and deleted again within the same step.
 
@@ -61,6 +64,7 @@ Videos themselves are downloaded to a temporary folder, processed and deleted ag
 - **Loopback only.** It listens on `127.0.0.1`, never on a network address, and there is no option to change that.
 - **Other websites cannot read it.** A request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` is refused (this stops DNS rebinding), responses carry no CORS headers, and the page is sent with `Cross-Origin-Resource-Policy: same-origin`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and a Content-Security-Policy of `default-src 'self'` with `frame-ancestors 'none'` (no inline script, no external resources, no framing).
 - **Other websites cannot start a run.** Every POST needs a random per-session token that only the served page contains, plus a matching `Origin` when the browser sends one. Starting an apply run needs a click on a confirmation dialog; `undo` is not available from the page.
+- **Face crops are served by number only.** `/evidence/<video>/<person>-<n>.jpg` is the only path that reads a picture, it must match that exact pattern (digits, one dash, `.jpg`), and the file is looked up in the evidence folder only, so no path can reach anything else in the data folder.
 - **No injection from your data.** File names, descriptions and log lines (descriptions come from a model and can be edited in Photos) are put into the page as text, never as HTML.
 - **The account form handles a password.** The password you type travels once, in the body of a request to `127.0.0.1` (HTTP on the loopback interface, so it never leaves the PC), is checked against the NAS over HTTPS, and is then stored in the Windows Credential Manager exactly as `videotag credentials set` does. The server never writes it to a log, a file or an error message and never sends it back (the account view shows only the address and the account name). The field is `type="password"` with `autocomplete="new-password"` so the browser does not offer to save it, and it is emptied after every attempt and when the dialog closes. Only `https://` addresses are accepted, and certificates are always verified. The form is disabled while the login comes from environment variables, because those would override the stored one.
 - **What it exposes** to anyone who can use your browser session: the file names and descriptions of your videos, who was matched, and the log. Treat the open tab like the photos themselves.

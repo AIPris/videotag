@@ -44,7 +44,7 @@ Everything above works headless, and the dashboard is never needed for it. If yo
 videotag gui        # opens http://127.0.0.1:8765/ in your browser (Ctrl+C in the terminal stops it)
 ```
 
-It shows the run in progress (phase, videos done, time left), the latest results per video and person with the scores behind each decision, what has been written to Photos and what you corrected, the history of runs, the live log and a health check. It watches the same data folder and log as a scheduled run, so it shows those too, it can start a dry run or (after a confirmation) an apply run, and it can change the Synology account (each account keeps its own saved data, see [switching accounts](docs/howto.md#switching-accounts)). Standard library only, nothing loaded from the internet, reachable from this PC only. Details: [docs/howto.md](docs/howto.md#dashboard-optional).
+It shows the run in progress (reading the reference photos, then videos done and time left) with the results of that run as they are made, the latest results per video and person with the scores and the face crops behind each decision, what has been written to Photos and what you corrected, how far the matching can be trusted, a random spot-check of the matches, the history of runs, the live log and a health check. Its Settings dialog holds the frame-rate preset every run uses. It watches the same data folder and log as a scheduled run, so it shows those too, it can start a dry run or (after a confirmation) an apply run, and it can change the Synology account (each account keeps its own saved data, see [switching accounts](docs/howto.md#switching-accounts)). Standard library only, nothing loaded from the internet, reachable from this PC only. Details: [docs/howto.md](docs/howto.md#dashboard-optional).
 
 ## Safe by design
 
@@ -64,7 +64,7 @@ It shows the run in progress (phase, videos done, time left), the latest results
 
 ## Status and limits
 
-Version 0.1, proof of concept proven on one NAS (DS224+, DSM 7.4.1) with a small test library.
+Version 0.1, proof of concept proven on one NAS (DS224+, DSM 7.4.1). A first dry run over a real library of 1,553 videos and 29,531 photos took about 12 hours; the speed presets, the saved reference faces and the download-while-describing pipeline are what bring that down (see [the roadmap](docs/roadmap.md)).
 
 - Match and description quality has not been audited against a large library. The description model is small (4B parameters) and can over-reach; the German has some awkward words.
 - Places are written only when a named landmark or readable text shows one. The Photos map stays empty: it needs GPS, and the tool never invents coordinates.

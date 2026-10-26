@@ -8,12 +8,15 @@ import threading
 
 import pytest
 
+from videotag import config, settings
 from videotag.accounts import AccountError, Identity, Layout
 from videotag.credentials import Credentials, load_credentials, store_credentials
 from videotag.dashboard import Sources
 from videotag.gui import API_VERSION, ASSETS_DIR, TOKEN_HEADER, make_server
 from videotag.launcher import LaunchError
 from videotag.lock import AlreadyRunning
+from videotag.settings import Settings
+from videotag.synology import SynologyError
 
 CHECKS = [{"name": "ffmpeg", "status": "ok", "detail": "ffmpeg version 7"}]
 
@@ -29,19 +32,26 @@ class Gui:
         (assets / "style.css").write_text("/* css */", encoding="utf-8")
         self.src = Sources(reports_dir=tmp_path / "reports", state_file=tmp_path / "state.json",
                            describe_dir=tmp_path / "describe", log_file=tmp_path / "videotag.log",
-                           lock_file=tmp_path / "run.lock")
+                           lock_file=tmp_path / "run.lock", faces_dir=tmp_path / "faces",
+                           evidence_dir=tmp_path / "evidence", accuracy_file=tmp_path / "accuracy.json")
         self.launched, self.checked, self.launch_error = [], [], None
+        self.albums, self.albums_error = [{"id": 5, "name": "Holiday"}, {"id": 6, "name": "Pets"}], None
         self.layout = Layout(state=tmp_path / "d-state", reports=tmp_path / "d-reports", cache=tmp_path / "d-cache",
                              logs=tmp_path / "d-logs", parked=tmp_path / "d-accounts")
         self.verified, self.verify_error = [], None
         self.server = make_server(self.src, 0, assets=assets, doctor=self._doctor, launch=self._launch,
-                                  verify=self._verify, layout=self.layout)
+                                  verify=self._verify, layout=self.layout, albums=self._albums)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
 
     def _doctor(self):
         self.checked.append(1)
         return CHECKS
+
+    def _albums(self):
+        if self.albums_error:
+            raise self.albums_error
+        return self.albums
 
     def _verify(self, credentials):
         if self.verify_error:
@@ -218,6 +228,131 @@ def test_a_port_that_is_taken_gives_a_plain_message_and_a_failure_exit(tmp_path,
     assert "probably in use" in capsys.readouterr().out
 
 
+# -- settings, albums and the new run options --------------------------------------------------------------
+
+def test_the_settings_endpoint_shows_the_defaults_the_presets_and_what_they_would_save(gui):
+    view = gui.get_json("/api/settings")
+    assert (view["preset"], view["describe"], view["problem"]) == ("thorough", True, None)
+    assert [preset["name"] for preset in view["presets"]] == ["thorough", "balanced", "fast"]
+    assert view["estimate"]["videos"] == 0 and view["reanalyse"]["of"] == 0
+
+
+def test_settings_chosen_on_the_page_are_saved_in_the_file_every_run_reads(gui):
+    status, _, payload = gui.request("POST", "/api/settings", {"preset": "fast", "describe": False})
+    assert status == 200 and json.loads(payload)["preset"] == "fast"
+    assert settings.load() == Settings("fast", False)
+    assert gui.get_json("/api/settings")["describe"] is False
+
+
+def test_saving_one_setting_keeps_the_other(gui):
+    gui.request("POST", "/api/settings", {"preset": "fast", "describe": False})
+    gui.request("POST", "/api/settings", {"preset": "balanced"})
+    assert settings.load() == Settings("balanced", False)
+
+
+@pytest.mark.parametrize(("body", "text"), [({"preset": "turbo"}, "unknown preset"), ({"apply": True}, "not a setting"),
+                                            ({"max_writes": 5}, "not a setting"), ({"describe": "yes"}, "true or false"),
+                                            ({"colour": 1}, "unknown setting")])
+def test_settings_the_file_itself_would_refuse_are_a_bad_request_and_nothing_is_saved(gui, body, text):
+    status, _, payload = gui.request("POST", "/api/settings", body)
+    assert status == 400 and text in json.loads(payload)["error"]
+    assert not config.SETTINGS_FILE.exists()
+
+
+def test_a_settings_file_that_cannot_be_read_is_reported_and_can_be_replaced_from_the_page(gui):
+    config.SETTINGS_FILE.write_text("{ half written", encoding="utf-8")
+    view = gui.get_json("/api/settings")
+    assert "unreadable" in view["problem"] and view["preset"] == "thorough"
+    assert gui.request("POST", "/api/settings", {"preset": "fast"})[0] == 200
+    assert gui.get_json("/api/settings")["problem"] is None and settings.load().preset == "fast"
+
+
+def test_changing_the_settings_needs_the_session_token(gui):
+    assert gui.request("POST", "/api/settings", {"preset": "fast"}, token=False)[0] == 403
+    assert not config.SETTINGS_FILE.exists()
+
+
+def test_your_albums_are_listed_on_request_and_only_with_the_token(gui):
+    assert gui.request("POST", "/api/albums", token=False)[0] == 403
+    status, _, payload = gui.request("POST", "/api/albums")
+    assert status == 200 and json.loads(payload) == [{"id": 5, "name": "Holiday"}, {"id": 6, "name": "Pets"}]
+
+
+@pytest.mark.parametrize("error", [AccountError("the saved data belongs to someone else"), SynologyError("login failed", 400)])
+def test_albums_that_cannot_be_listed_say_why(gui, error):
+    gui.albums_error = error
+    status, _, payload = gui.request("POST", "/api/albums")
+    assert status == 400 and str(error) in json.loads(payload)["error"]
+
+
+def test_the_slice_the_preset_and_re_analysing_are_passed_on_to_the_run(gui):
+    body = {"limit": 20, "new_only": True, "album": 5, "preset": "balanced", "reanalyse": True}
+    assert gui.request("POST", "/api/run", body)[0] == 202
+    assert gui.launched == [{"apply": False, "max_writes": 100, "describe": True, **body}]
+
+
+@pytest.mark.parametrize("body", [{"new_only": "yes"}, {"reanalyse": 1}])
+def test_a_run_request_with_a_yes_or_no_that_is_not_one_is_a_bad_request(gui, body):
+    assert gui.request("POST", "/api/run", body)[0] == 400
+    assert gui.launched == []
+
+
+# -- evidence, accuracy and the spot-check -------------------------------------------------------------------
+
+def put_crop(gui, video_id, name, content=b"jpeg-bytes"):
+    folder = gui.src.evidence_dir / str(video_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(content)
+
+
+def test_a_crop_is_served_as_a_jpeg_with_the_locked_down_headers(gui):
+    put_crop(gui, 12, "7-1.jpg")
+    status, headers, payload = gui.request("GET", "/evidence/12/7-1.jpg")
+    assert status == 200 and payload == b"jpeg-bytes" and headers["Content-Type"] == "image/jpeg"
+    assert headers["X-Content-Type-Options"] == "nosniff" and "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+
+
+@pytest.mark.parametrize("path", ["/evidence/12/9-9.jpg", "/evidence/12/notes.txt", "/evidence/12/7-1.png",
+                                  "/evidence/../state.json", "/evidence/12/../../state.json", "/evidence/12/%2e%2e%2fstate.json",
+                                  "/evidence/x/7-1.jpg", "/evidence/12/7-1.jpg/", "/evidence//7-1.jpg",
+                                  "/evidence/12/7-1.jpg.part", "/evidence/12"])
+def test_only_crops_that_exist_are_served_and_nothing_else_in_the_data_home(gui, path):
+    put_crop(gui, 12, "7-1.jpg")
+    put_crop(gui, 12, "notes.txt", b"private")
+    (gui.src.state_file).write_text("secret", encoding="utf-8")
+    assert gui.request("GET", path)[0] == 404
+
+
+def test_a_crop_is_not_served_to_a_foreign_host_name(gui):
+    put_crop(gui, 12, "7-1.jpg")
+    assert gui.request("GET", "/evidence/12/7-1.jpg", host="evil.example")[0] == 403
+
+
+def test_the_accuracy_endpoint_gives_the_latest_report_or_nothing(gui):
+    assert gui.get_json("/api/accuracy") is None
+    gui.src.accuracy_file.write_text(json.dumps({"time": "2026-10-26T12:00:00", "people": []}), encoding="utf-8")
+    assert gui.get_json("/api/accuracy")["time"] == "2026-10-26T12:00:00"
+
+
+def test_a_spot_check_is_drawn_on_request_with_the_session_token(gui):
+    gui.src.reports_dir.mkdir()
+    rows = [{"video_id": n, "filename": f"clip{n}.mp4", "matches": [{"person_id": 7, "name": "Alice", "best": 0.5,
+                                                                    "hit_frames": 3, "decision": "auto"}]} for n in range(1, 9)]
+    (gui.src.reports_dir / "run-20261025-101500.json").write_text(json.dumps(rows), encoding="utf-8")
+    assert gui.request("POST", "/api/spotcheck", {"count": 3}, token=False)[0] == 403
+    status, _, payload = gui.request("POST", "/api/spotcheck", {"count": 3})
+    (alice,) = json.loads(payload)
+    assert status == 200 and alice["name"] == "Alice"
+    assert len(alice["confident"]["sample"]) == 3 and alice["confident"]["total"] == 8
+    (by_default,) = json.loads(gui.request("POST", "/api/spotcheck", {})[2])
+    assert len(by_default["confident"]["sample"]) == 5  # five unless asked otherwise
+
+
+@pytest.mark.parametrize("count", [0, -1, 21, "3", 1.5, True, None])
+def test_a_spot_check_of_a_silly_size_is_a_bad_request(gui, count):
+    assert gui.request("POST", "/api/spotcheck", {"count": count})[0] == 400
+
+
 # -- the account ---------------------------------------------------------------------------------
 
 CLAUDE = Identity("https://nas.example.com", "claude")
@@ -340,3 +475,17 @@ def test_the_page_knows_the_api_version_it_needs_and_it_is_the_one_this_server_s
 def test_the_page_has_a_place_to_say_the_server_is_older_than_it(gui):
     index = (ASSETS_DIR / "index.html").read_text(encoding="utf-8")
     assert 'id="stale"' in index and "start it again" in index
+
+
+def test_the_page_links_a_video_by_the_route_photos_itself_shows_for_a_video_opened_from_a_folder():
+    script = (ASSETS_DIR / "app.js").read_text(encoding="utf-8")
+    # copied from the address bar of Photos' web app: .../?launchApp=SYNO.Foto.AppInstance#/personal_space/folder/640/item/39434
+    assert "/?launchApp=SYNO.Foto.AppInstance#/personal_space/folder/${video.folder_id}/item/${video.id}" in script
+    assert 'rel: "noopener noreferrer"' in script and 'target: "_blank"' in script
+
+
+def test_the_page_shows_no_link_for_data_that_belongs_to_another_account():
+    script = (ASSETS_DIR / "app.js").read_text(encoding="utf-8")
+    start = script.index("function photosLink")
+    body = script[start: script.index("\n}\n", start)]
+    assert "account.mismatch" in body and "account.owner" in body and "folder_id" in body

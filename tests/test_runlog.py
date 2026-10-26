@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 import pytest
 
 from videotag.config import LOG_BACKUPS
-from videotag.runlog import last_run, parse_lines, read_lines, read_tail, started_message
+from videotag.runlog import last_run, parse_lines, read_lines, read_tail, references_message, slice_message, started_message
 
 START = "2026-10-25 15:19:19,100 INFO run started: dry run"
 LIBRARY = "2026-10-25 15:19:20,200 INFO library: 9 photos, 3 videos"
@@ -108,6 +108,48 @@ def test_read_tail_drops_the_line_it_cut_in_half(tmp_path):
 def test_the_marker_a_run_writes_is_the_marker_the_reader_looks_for(apply, mode):
     run = last_run(lines(f"2026-10-25 15:19:19,100 INFO {started_message(apply)}"), NOW)
     assert run.mode == mode
+
+
+# -- the phase before the videos, and slices -----------------------------------------------------------
+
+def refs(done, total, second):
+    return f"2026-10-25 15:19:{second:02d},000 INFO {references_message(done, total)}"
+
+
+def test_the_reference_phase_shows_its_progress_and_estimates_the_time_left_from_its_own_pace():
+    run = last_run(lines(START, refs(0, 100, 20), refs(25, 100, 30)), NOW)
+    assert run.references == (25, 100) and run.references_remaining_seconds == pytest.approx(30)  # 25 photos took 10 s
+    assert run.phase == "Learning the faces of your people" and run.total is None and run.done == 0 and run.errors == 0
+
+
+def test_the_reference_phase_has_no_estimate_before_the_first_photo_is_done():
+    run = last_run(lines(START, refs(0, 100, 20)), NOW)
+    assert run.references == (0, 100) and run.references_remaining_seconds is None
+
+
+def test_after_the_library_line_the_phase_is_the_videos_and_the_references_stay_for_the_record():
+    run = last_run(lines(START, refs(0, 100, 20), refs(100, 100, 40), LIBRARY.replace("15:19:20", "15:19:41"), FIRST), NOW)
+    assert run.phase == "Analysing videos" and run.references == (100, 100) and run.references_remaining_seconds is None
+    assert run.done == 1
+
+
+def test_a_run_without_reference_lines_has_none():
+    assert last_run(lines(START, LIBRARY), NOW).references is None
+
+
+def test_a_slice_replaces_the_library_as_the_total_and_remembers_how_big_the_library_is():
+    run = last_run(lines(START, LIBRARY, "2026-10-25 15:19:20,300 INFO " + slice_message(2, 3), FIRST), NOW)
+    assert (run.total, run.slice_of, run.done) == (2, 3, 1)
+    assert run.remaining_seconds == pytest.approx(4.8)  # one more video of the two
+
+
+def test_a_run_without_a_slice_has_no_slice():
+    assert last_run(lines(START, LIBRARY, FIRST), NOW).slice_of is None
+
+
+def test_the_lines_that_are_not_about_a_video_are_never_counted_as_one():
+    run = last_run(lines(START, refs(120, 2432, 21), LIBRARY, "2026-10-25 15:19:20,300 INFO " + slice_message(20, 1553)), NOW)
+    assert run.done == 0 and run.errors == 0 and run.current is None
 
 
 # -- a run longer than one log file ------------------------------------------------------------

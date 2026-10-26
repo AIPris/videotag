@@ -5,10 +5,11 @@
 
 const TOKEN = document.querySelector('meta[name="videotag-token"]').content;
 const PAGE_SIZE = 100;
-const API_VERSION = 2;  // must equal API_VERSION in gui.py: an update changes this page at once, but an open dashboard keeps its old code
+const API_VERSION = 3;  // must equal API_VERSION in gui.py: an update changes this page at once, but an open dashboard keeps its old code
 
 const app = {
-  status: null, library: null, history: null, version: null,
+  status: null, library: null, history: null, version: null, settings: null,
+  accuracy: null, spot: null,
   filter: {text: "", result: "all", person: "all"}, shown: PAGE_SIZE, open: new Set(), tab: "overview",
 };
 
@@ -71,6 +72,21 @@ function toast(message) {
   toastTimer = setTimeout(() => { box.hidden = true; }, 6000);
 }
 
+// -- opening a video in Photos ---------------------------------------------------------------------
+
+function photosLink(video) {
+  const account = app.account;  // results of another account would link into the wrong library, so only the current one's do
+  if (!account || !account.current || !account.owner || account.mismatch || !video.folder_id) return null;
+  return `${account.current.url}/?launchApp=SYNO.Foto.AppInstance#/personal_space/folder/${video.folder_id}/item/${video.id}`;
+}
+
+function videoTitle(video) {
+  const href = photosLink(video);
+  return href ? el("a", {href, target: "_blank", rel: "noopener noreferrer", title: "Open this video in Synology Photos",
+                         onclick: (event) => event.stopPropagation()}, video.filename)  // a click on the name must not fold the row
+              : video.filename;
+}
+
 // -- vocabulary: how the data's words read to a person -------------------------------------------
 
 const RESULTS = [
@@ -87,6 +103,20 @@ const PERSON_STATUS = {
 const DESCRIPTION_STATUS = {
   written: "in Photos", rejected: "removed by you", pending: "not written yet", none: "none",
 };
+
+const PRESET_NAMES = {thorough: "Thorough", balanced: "Balanced", fast: "Fast"};
+
+function ruleText(preset) {
+  if (!preset.tail_fps) return `${preset.fps} frames a second throughout`;
+  return `${preset.fps} frames a second for the first ${preset.head_seconds} s, then one every ${1 / preset.tail_fps} s`;
+}
+
+function savingText(name, estimate) {
+  if (name === "thorough") return "Today's behaviour, and the default.";
+  const saving = estimate.saving[name];
+  return saving === null ? "Analyse some videos first to see what this would save on your library."
+    : `About ${saving}% fewer frames on your ${plural(estimate.videos, "analysed video")}.`;
+}
 
 function personChip(person) {
   const label = {tagged: person.name, suggested: `${person.name}?`, planned: `○ ${person.name}`,
@@ -110,6 +140,9 @@ function runCopy(state, run, report) {
   }
   if (state === "running" && run.finished) {  // the report is saved, the process has not exited yet
     return {title: "Finishing up", lead: "The report is saved and the run is closing."};
+  }
+  if (state === "running" && run.references && !run.total) {
+    return {title: run.phase, lead: "Reading the photos of the people you named. Their faces are saved, so the next run only reads photos that are new or changed."};
   }
   if (state === "running") {
     return {title: run.phase, lead: run.mode === "apply" ? "This run writes to Photos once the analysis is done."
@@ -136,10 +169,18 @@ function renderRun() {
   const copy = runCopy(state, run, app.library && app.library.report);
   const analysing = state === "running" && run && run.total && run.phase === "Analysing videos";
   const finishing = state === "running" && run && run.finished;
-  const percent = finishing ? 100 : analysing ? Math.round((run.done / run.total) * 100) : 0;
+  const learning = state === "running" && run && run.references && run.references.total > 0 && !run.total && !run.finished;
+  const percent = finishing ? 100 : analysing ? Math.round((run.done / run.total) * 100)
+    : learning ? Math.round((run.references.done / run.references.total) * 100) : 0;
+  const determinate = analysing || finishing || learning;
   const facts = [];
   if (state === "running" && run) {
-    if (run.total) facts.push(el("span", {class: "figure"}, el("strong", {}, `${run.done} of ${run.total}`), " videos"));
+    if (learning) {
+      facts.push(el("span", {class: "figure"}, el("strong", {}, `${run.references.done} of ${run.references.total}`), " photos"));
+      if (run.references.remaining_seconds !== null) facts.push(el("span", {}, `about ${duration(run.references.remaining_seconds)} left`));
+    }
+    if (run.total) facts.push(el("span", {class: "figure"}, el("strong", {}, `${run.done} of ${run.total}`), " videos",
+                                 run.slice_of ? ` (a slice of ${run.slice_of})` : ""));
     if (run.current) facts.push(el("span", {}, "Now: ", el("strong", {}, run.current.replace(/^\d+ /, ""))));
     if (run.remaining_seconds !== null && analysing) facts.push(el("span", {}, `about ${duration(run.remaining_seconds)} left`));
     facts.push(el("span", {}, `running for ${duration(run.elapsed_seconds)}`));
@@ -151,10 +192,10 @@ function renderRun() {
   fill($("run"), 
     el("h2", {class: "run-title"}, copy.title),
     el("p", {class: "run-lead"}, copy.lead),
-    state === "running" ? el("div", {class: `progress${analysing || finishing ? "" : " waiting"}`, role: "progressbar",
+    state === "running" ? el("div", {class: `progress${determinate ? "" : " waiting"}`, role: "progressbar",
                                      "aria-label": "Run progress", "aria-valuemin": 0, "aria-valuemax": 100,
-                                     "aria-valuenow": analysing || finishing ? percent : null},
-                             el("div", {style: analysing || finishing ? `width:${percent}%` : null})) : null,
+                                     "aria-valuenow": determinate ? percent : null},
+                             el("div", {style: determinate ? `width:${percent}%` : null})) : null,
     facts.length ? el("div", {class: "facts"}, facts) : null);
 
   const badge = $("state-badge");
@@ -163,7 +204,8 @@ function renderRun() {
                        never: app.library && app.library.report ? "Idle" : "No run yet"}[state];
   $("run-open").disabled = state === "running";
   $("run-open").textContent = state === "running" ? "Run in progress" : "Start a run";
-  document.title = state === "running" && analysing ? `videotag: ${run.done}/${run.total}` : "videotag";
+  document.title = state === "running" && analysing ? `videotag: ${run.done}/${run.total}`
+    : learning ? `videotag: ${run.references.done}/${run.references.total} photos` : "videotag";
 }
 
 // -- overview ------------------------------------------------------------------------------------
@@ -181,6 +223,89 @@ const RESULT_COLORS = {auto: "var(--c-auto)", review: "var(--c-review)", none: "
 
 function factList(rows) {
   return el("dl", {class: "facts-list"}, rows.map(([label, value]) => [el("dt", {}, label), el("dd", {}, value)]));
+}
+
+function liveNote() {
+  return app.library.report && app.library.report.live
+    ? el("p", {class: "notice live"}, "Live view: the results of the run in progress, as they are made. When it finishes, its report takes over.")
+    : null;
+}
+
+// -- how far the matching can be trusted ---------------------------------------------------------
+
+const KIND_LABEL = {single: "from photos of one person", group: "from group photos", cover: "from the cover"};
+
+function accuracySection() {
+  const a = app.accuracy, number = (value) => (value === null || value === undefined ? "-" : value.toFixed(2));
+  const heading = el("h2", {}, "How far the matching can be trusted");
+  if (!a) {
+    return el("section", {class: "people"}, heading,
+      el("p", {class: "sub"}, "Every run works this out from the reference faces it builds. Start a run to see it here."));
+  }
+  const confident = (p) => (p.confident_allowed ? "Allowed" : "Suggestions only: too few reference faces");
+  return el("section", {class: "people"}, heading,
+    el("p", {class: "sub"}, `Worked out by the run of ${when(a.time)} from the reference faces of each named person. `
+       + "Nothing here needs your NAS or a video."),
+    el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "Person"), el("th", {class: "num"}, "Reference faces"),
+        el("th", {class: "num"}, "Own faces recognised"), el("th", {class: "num"}, "Threshold"), el("th", {}, "Confident tags"))),
+      el("tbody", {}, a.people.map((p) => el("tr", {},
+        el("td", {}, el("strong", {}, p.name)),
+        el("td", {class: "num", title: Object.entries(p.kinds).map(([kind, n]) => `${n} ${KIND_LABEL[kind] || kind}`).join(", ")}, p.references),
+        el("td", {class: "num", title: "Each reference face compared with the person's other reference faces"},
+           p.recognised.of ? `${p.recognised.n} of ${p.recognised.of}` : "-"),
+        el("td", {class: "num", title: `Own faces ${number(p.same_person.mean)} on average; the closest other person reaches ${number(p.others.max)}`}, number(p.threshold)),
+        el("td", {}, confident(p)))))),
+    a.lookalikes.length
+      ? el("div", {class: "group"}, el("h3", {}, "Faces that resemble each other"),
+          el("ul", {class: "legend"}, a.lookalikes.map((pair) => el("li", {},
+            el("span", {}), el("span", {}, `${pair.person} looks like ${pair.resembles}`,
+              el("span", {class: "hint"}, `up to ${number(pair.similarity)}; ${pair.faces} of ${pair.of} of ${pair.person}'s reference faces are above the minimum match level. `
+                + "The threshold is raised to keep them apart.")),
+            el("span", {class: "num"}, number(pair.similarity))))))
+      : el("p", {class: "sub", style: "margin-top:10px"}, "No two named people have faces that resemble each other enough to matter."),
+    a.mixed_up.length
+      ? el("p", {class: "notice"}, "With the thresholds of that run, these reference faces would be given to somebody else: "
+          + a.mixed_up.map((pair) => `${pair.faces} of ${pair.person}'s ${pair.of} to ${pair.taken_for}`).join("; ")
+          + ". That happens when a threshold is set by hand (--threshold) and is too low.")
+      : null);
+}
+
+// -- spot-check ----------------------------------------------------------------------------------
+
+function spotGroup(label, group) {
+  if (!group.total) return null;
+  return el("div", {class: "spot-group"},
+    el("h4", {}, `${label}: ${group.sample.length} of ${group.total}`),
+    el("ul", {}, group.sample.map((item) => el("li", {}, el("strong", {}, videoTitle({id: item.video_id, folder_id: item.folder_id, filename: item.filename})), el("span", {class: "small"}, `  (video ${item.video_id})`)))));
+}
+
+function renderSpot() {
+  const people = app.spot;
+  fill($("spot-result"), people === null ? null : people.length
+    ? people.map((person) => el("div", {class: "spot-person"}, el("h3", {}, person.name),
+        spotGroup("Confident matches", person.confident), spotGroup("Suggestions", person.suggested)))
+    : el("p", {class: "sub", style: "margin-top:10px"}, "Nothing to check: the latest report has no matches you have not already settled."));
+}
+
+function spotSection() {
+  const count = el("select", {id: "spot-count", "aria-label": "Videos per group"},
+    [3, 5, 10].map((n) => el("option", {value: String(n), selected: n === 5}, `${n} per group`)));
+  const draw = el("button", {type: "button", onclick: async () => {
+    draw.disabled = true;
+    try {
+      app.spot = await api("/api/spotcheck", {method: "POST", body: JSON.stringify({count: Number(count.value)})});
+      renderSpot();
+    } catch (error) { toast(error.message); }
+    draw.disabled = false;
+  }}, "Draw a sample");
+  setTimeout(renderSpot);  // the section is in the page by then; a sample drawn before a refresh stays on screen
+  return el("section", {class: "people"},
+    el("h2", {}, "Spot-check"),
+    el("p", {class: "sub"}, "A random sample of each person's matches in the latest report. Search a file name in Photos to open the video and see whether the match is right. "
+       + "Matches you already confirmed or removed in Photos are left out."),
+    el("div", {class: "spot-head"}, count, draw),
+    el("div", {id: "spot-result"}));
 }
 
 function renderOverview() {
@@ -208,12 +333,23 @@ function renderOverview() {
         [p.tagged, p.suggested, p.planned, p.confirmed, p.rejected].map((n) => el("td", {class: "num"}, n)))))) :
       el("p", {class: "sub"}, "No named people were available to the last run."));
 
+  const twins = lib.twins.length ? el("section", {class: "people"},
+    el("h2", {}, "The same file more than once"),
+    el("p", {class: "sub"}, `${plural(lib.twins.length, "file")} sit${lib.twins.length === 1 ? "s" : ""} in Photos as more than one video. videotag analysed each once and gave every copy the same result. `
+       + "To tidy up, delete the extra copies in Photos yourself: videotag never deletes a video."),
+    el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Video numbers in Photos"))),
+      el("tbody", {}, lib.twins.map((t) => el("tr", {}, el("td", {}, el("strong", {}, t.filename)), el("td", {}, t.ids.join(", ")))))))
+    : null;
+
   fill($("view-overview"), 
     lib.problem ? el("p", {class: "notice"}, `${lib.problem}. Showing the report without the state of your tags until it can be read.`) : null,
+    liveNote(),
     el("div", {class: "overview"},
       el("div", {},
         el("h2", {}, "Videos by result"),
-        el("p", {class: "sub"}, `${plural(t.videos, "video")} in the report of ${when(lib.report.time)}`),
+        el("p", {class: "sub"}, lib.report.live ? `${plural(t.videos, "video")} so far in the run that started ${when(lib.report.time)}`
+                                                : `${plural(t.videos, "video")} in the report of ${when(lib.report.time)}`),
         segments(parts, "bar"), legend,
         el("p", {class: "sub", style: "margin-top:14px"}, `${t.described} of ${t.videos} videos have a description.`)),
       el("div", {},
@@ -223,7 +359,7 @@ function renderOverview() {
         el("div", {class: "group"}, el("h3", {}, "Your corrections"),
           factList([["Matches you confirmed", s.confirmed], ["Matches you removed", s.rejected],
                     ["Descriptions you removed", s.descriptions_rejected]])))),
-    people);
+    people, twins, accuracySection(), spotSection());
 }
 
 // -- videos --------------------------------------------------------------------------------------
@@ -259,6 +395,13 @@ function descriptionBlock(video) {
   ];
 }
 
+function cropRows(video) {
+  return video.people.filter((p) => p.crops.length).map((p) => el("div", {class: "crop-row"},
+    el("span", {class: "small"}, `${p.name}, the faces it is based on:`),
+    p.crops.map((name) => el("img", {class: "crop", src: `/evidence/${video.evidence_id}/${name}`, loading: "lazy",
+                                     alt: `A face of ${p.name} that the match is based on`}))));
+}
+
 function videoDetail(video) {
   const people = video.people.length ? el("table", {},
     el("thead", {}, el("tr", {}, el("th", {}, "Person"), el("th", {}, "Result"), el("th", {class: "num"}, "Best match"),
@@ -271,6 +414,8 @@ function videoDetail(video) {
     el("div", {},
       el("div", {class: "block"}, el("h3", {}, "People"),
         video.error ? el("p", {class: "problem"}, video.error) : people || el("p", {class: "sub"}, "No named person was recognised."),
+        cropRows(video),
+        video.twin_of ? el("p", {class: "small", style: "margin-top:6px"}, `The same file as video ${video.twin_of}: it was analysed once and this video shares the result.`) : null,
         checked ? el("p", {class: "small", style: "margin-top:6px"}, checked) : null)),
     el("div", {},
       el("div", {class: "block"}, el("h3", {}, "What the model saw"),
@@ -283,7 +428,7 @@ function videoRow(video) {
   const row = el("details", {class: "video", "data-id": video.id},
     el("summary", {},
       el("span", {class: `strip ${video.decision}`, title: RESULT_LABEL[video.decision]}),
-      el("div", {}, el("div", {class: "name"}, video.filename), el("div", {class: "who"}, who)),
+      el("div", {}, el("div", {class: "name"}, videoTitle(video)), el("div", {class: "who"}, who)),
       el("div", {}, video.description
         ? [el("p", {class: "caption summary-line"}, video.description.en),
            el("p", {class: "small"}, `Description: ${DESCRIPTION_STATUS[video.description_status]}`,
@@ -319,10 +464,11 @@ function buildVideosView() {
     oninput: (e) => { app.filter.text = e.target.value; app.shown = PAGE_SIZE; renderVideoList(); }});
   fill($("view-videos"), 
     el("div", {class: "filters"}, search, el("div", {class: "seg", id: "result-filter", role: "group", "aria-label": "Result"}, buttons), person),
-    el("p", {class: "count", id: "video-count"}), el("div", {id: "video-list"}));
+    el("div", {id: "live-note"}), el("p", {class: "count", id: "video-count"}), el("div", {id: "video-list"}));
 }
 
 function updateVideoControls() {
+  fill($("live-note"), liveNote());
   const lib = app.library, counts = {all: lib.videos.length, auto: lib.totals.auto, review: lib.totals.review,
                                       none: lib.totals.none, error: lib.totals.errors};
   for (const button of $("result-filter").children) {
@@ -431,24 +577,79 @@ function wireTabs() {
 
 function runOptions() {
   const apply = document.querySelector('input[name="mode"]:checked').value === "apply";
-  return {apply, describe: $("run-describe").checked, max_writes: Number($("run-cap").value)};
+  const options = {apply, describe: $("run-describe").checked, max_writes: Number($("run-cap").value)};
+  if ($("run-preset").value) options.preset = $("run-preset").value;
+  if (!apply) {  // a slice is for a dry run: an apply run always covers the whole library
+    const limit = $("run-limit").value.trim();
+    if (limit) options.limit = Number(limit);
+    if ($("run-new").checked) options.new_only = true;
+    if ($("run-album").value) options.album = Number($("run-album").value);
+  }
+  return options;
+}
+
+function runCommand(o) {  // only what differs from the saved settings: those are what a terminal would need to be told
+  const saved = app.settings || {};
+  return ["videotag run", o.apply && `--apply --max-writes ${o.max_writes}`, o.preset && o.preset !== saved.preset && `--preset ${o.preset}`,
+          o.describe !== saved.describe && (o.describe ? "--describe" : "--no-describe"), o.limit && `--limit ${o.limit}`,
+          o.new_only && "--new-only", o.album && `--album ${o.album}`].filter(Boolean).join(" ");
 }
 
 function refreshRunDialog() {
   const o = runOptions();
   $("run-cap-row").hidden = $("run-warning").hidden = !o.apply;
+  $("run-slice").hidden = o.apply;
   $("run-start").textContent = o.apply ? "Apply changes" : "Start dry run";
-  $("run-command").textContent = ["videotag run", o.apply && `--apply --max-writes ${o.max_writes}`, !o.describe && "--no-describe"]
-    .filter(Boolean).join(" ");
+  $("run-command").textContent = runCommand(o);
+  const preset = app.settings && app.settings.presets.find((p) => p.name === o.preset);
+  $("run-preset-note").textContent = preset ? `${ruleText(preset)}. Videos that already have a saved result keep it.` : "";
+}
+
+function fillPresetChoices(select, chosen) {
+  fill(select, app.settings.presets.map((p) => el("option", {value: p.name}, `${PRESET_NAMES[p.name]}: ${ruleText(p)}`)));
+  select.value = chosen;
+}
+
+async function loadAlbums() {
+  const button = $("albums-load"), failure = $("albums-error");
+  button.disabled = true;
+  button.textContent = "Loading...";
+  failure.hidden = true;
+  try {
+    const albums = await api("/api/albums", {method: "POST"});
+    fill($("run-album"), el("option", {value: ""}, "The whole library"),
+         albums.map((album) => el("option", {value: String(album.id)}, album.name || `Album ${album.id}`)));
+    if (!albums.length) { failure.textContent = "You have no albums of your own in Photos."; failure.hidden = false; }
+  } catch (error) {
+    failure.textContent = error.message;
+    failure.hidden = false;
+  }
+  button.disabled = false;
+  button.textContent = "Load my albums";
+}
+
+async function openRunDialog() {
+  $("run-error")?.remove();
+  try {
+    if (!app.settings) app.settings = await api("/api/settings");
+  } catch (error) {
+    toast(`Could not load the settings: ${error.message}`);
+    return;
+  }
+  fillPresetChoices($("run-preset"), app.settings.preset);
+  $("run-describe").checked = app.settings.describe;
+  $("run-limit").value = "";
+  $("run-new").checked = false;
+  fill($("run-album"), el("option", {value: ""}, "The whole library"));
+  $("albums-error").hidden = true;
+  $("run-dialog").showModal();
+  refreshRunDialog();
 }
 
 function wireRunDialog() {
   const dialog = $("run-dialog");
-  $("run-open").addEventListener("click", () => {
-    $("run-error")?.remove();
-    dialog.showModal();
-    refreshRunDialog();
-  });
+  $("run-open").addEventListener("click", openRunDialog);
+  $("albums-load").addEventListener("click", loadAlbums);
   $("run-cancel").addEventListener("click", () => dialog.close());
   $("run-form").addEventListener("input", refreshRunDialog);
   $("run-form").addEventListener("submit", async (event) => {
@@ -467,6 +668,81 @@ function wireRunDialog() {
   });
 }
 
+// -- the settings --------------------------------------------------------------------------------
+
+function chosenPreset() { return document.querySelector('input[name="settings-preset"]:checked').value; }
+
+function renderReanalyse() {
+  const s = app.settings, name = chosenPreset(), touched = s.reanalyse.touched[name], pace = s.reanalyse.pace_seconds;
+  const start = el("button", {type: "button", id: "reanalyse-start", onclick: async () => {
+    start.disabled = true;
+    try {
+      await api("/api/run", {method: "POST", body: JSON.stringify({reanalyse: true, preset: name, describe: $("settings-describe").checked})});
+    } catch (error) {
+      start.disabled = false;
+      $("settings-error").textContent = error.message;
+      $("settings-error").hidden = false;
+      return;
+    }
+    $("settings-dialog").close();
+    toast("Re-analysis started as a dry run. Progress shows at the top.");
+    poll();
+  }}, `Re-analyse ${plural(touched, "video")} (dry run)`);
+  fill($("settings-reanalyse"),
+    el("h3", {}, "Results made under another preset"),
+    el("p", {class: "sub"}, "A preset only applies to videos without a saved result. Results you already have are kept, whatever preset you choose."),
+    touched === 0
+      ? el("p", {style: "margin-top:8px"}, s.reanalyse.of ? `All ${plural(s.reanalyse.of, "saved result")} were made under this preset.` : "There are no saved results yet.")
+      : [el("p", {style: "margin-top:8px"}, `${touched} of ${plural(s.reanalyse.of, "saved result")} ${touched === 1 ? "was" : "were"} made under another preset. `
+            + `Redoing ${touched === 1 ? "it reads that video" : "them reads those videos"} again and writes nothing to Photos`
+            + (pace ? `, and takes up to about ${duration(touched * pace)} (the pace of your last run, which also described every video).` : ".")),
+         start]);
+}
+
+function openSettingsDialog() {
+  const s = app.settings;
+  $("settings-problem").hidden = !s.problem;
+  $("settings-problem").textContent = s.problem ? `${s.problem}. Saving replaces that file.` : "";
+  $("settings-error").hidden = true;
+  $("settings-describe").checked = s.describe;
+  fill($("settings-presets"), s.presets.map((p) => el("label", {class: "choice"},
+    el("input", {type: "radio", name: "settings-preset", value: p.name, checked: p.name === s.preset}),
+    el("span", {}, el("strong", {}, `${PRESET_NAMES[p.name]}: ${ruleText(p)}`),
+       el("span", {class: "hint"}, savingText(p.name, s.estimate))))));
+  renderReanalyse();
+  $("settings-dialog").showModal();
+}
+
+function wireSettingsDialog() {
+  const dialog = $("settings-dialog");
+  $("settings-open").addEventListener("click", async () => {
+    try {
+      app.settings = await api("/api/settings");
+    } catch (error) {
+      toast(error.status === 404 ? "This dashboard is older than the page and has no settings. Close the videotag gui window and start it again."
+                                 : `Could not load the settings: ${error.message}`);
+      return;
+    }
+    openSettingsDialog();
+  });
+  $("settings-cancel").addEventListener("click", () => dialog.close());
+  $("settings-presets").addEventListener("change", renderReanalyse);
+  $("settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const save = $("settings-save");
+    save.disabled = true;
+    try {
+      app.settings = await api("/api/settings", {method: "POST", body: JSON.stringify({preset: chosenPreset(), describe: $("settings-describe").checked})});
+      dialog.close();
+      toast("Settings saved. Every run uses them from now on.");
+    } catch (error) {
+      $("settings-error").textContent = error.message;
+      $("settings-error").hidden = false;
+    }
+    save.disabled = false;
+  });
+}
+
 // -- the account ---------------------------------------------------------------------------------
 
 function renderAccountButton() {
@@ -482,6 +758,7 @@ async function loadAccount() {
   let problem = null;
   try {
     app.account = await api("/api/account");
+    if (app.library) { renderVideoList(); renderOverview(); }  // the links to Photos need the account, which may arrive after the library
   } catch (error) {
     problem = error.status === 404
       ? "This dashboard is older than the page and has no account support. Close the videotag gui window and start it again."
@@ -588,7 +865,8 @@ function wireAccountDialog() {
 // -- loading -------------------------------------------------------------------------------------
 
 async function loadData() {
-  [app.library, app.history] = await Promise.all([api("/api/library"), api("/api/history")]);
+  [app.library, app.history, app.accuracy] = await Promise.all([api("/api/library"), api("/api/history"),
+                                                                  api("/api/accuracy").catch(() => null)]);
   renderOverview();
   updateVideoControls();
   renderVideoList();
@@ -619,12 +897,14 @@ async function poll() {
 async function start() {
   wireTabs();
   wireRunDialog();
+  wireSettingsDialog();
   wireAccountDialog();
   buildVideosView();
   buildLogView();
   buildHealthView();
   selectTab(TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "overview");
   api("/api/doctor").then(renderHealth, () => {});
+  api("/api/settings").then((settings) => { app.settings = settings; }, () => {});
   loadAccount();
   await poll();
 }

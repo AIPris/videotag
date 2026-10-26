@@ -8,9 +8,12 @@
 6. [First write](#first-write)
 7. [Correcting results](#correcting-results)
 8. [Run it every day](#run-it-every-day)
-9. [Commands and options](#commands-and-options)
-10. [Maintenance](#maintenance)
-11. [Troubleshooting](#troubleshooting)
+9. [Speed: presets and settings](#speed-presets-and-settings)
+10. [Looking at part of the library](#looking-at-part-of-the-library)
+11. [Checking that the matches are right](#checking-that-the-matches-are-right)
+12. [Commands and options](#commands-and-options)
+13. [Maintenance](#maintenance)
+14. [Troubleshooting](#troubleshooting)
 
 ## What you need
 
@@ -85,7 +88,7 @@ Where the login comes from, and how to use environment variables or secret files
 videotag run
 ```
 
-A dry run reads Photos, downloads and analyses each video (the first time; results are cached), and **writes nothing**. It logs what it *would* do. The first run describes every video and takes a while (about 5 seconds per video on a modern GPU, plus a one-time 9 GB model download); later runs reuse the caches and take seconds.
+A dry run reads Photos, downloads and analyses each video (the first time; results are cached), and **writes nothing**. It logs what it *would* do. The first run describes every video and takes a while (about 10 seconds per video on a modern GPU, plus a one-time 9 GB model download, and a long first step that reads the photos of every named person: the log and the dashboard count it as `references: 600 of 2432 photos`). The faces found in those photos are kept, so later runs read only photos that are new or changed, and reuse the video caches too: an unchanged library takes seconds.
 
 Read the log (`%LOCALAPPDATA%\videotag\logs\videotag.log`, rotated) and the JSON report (`reports\`):
 
@@ -161,7 +164,7 @@ Things to decide, and know:
 
 ### Test the task properly
 
-Once everything is cached, a scheduled run never calls ffmpeg, never loads the model and never downloads anything, which are exactly the things most likely to break under Task Scheduler (shorter `PATH`, different user profile, no console). So after registering:
+Once everything is cached (including the face crops of the matched videos, which the first run after an update makes), a scheduled run never calls ffmpeg, never loads the model and never downloads anything, which are exactly the things most likely to break under Task Scheduler (shorter `PATH`, different user profile, no console). If a video still needs its crops and ffmpeg is missing, the run logs a warning and keeps the video's saved results; it does not turn it into a failure. So after registering:
 
 1. Force a cache miss for one video: delete its files `state\faces\<id>.npz` and `state\describe\<id>.json` in the data folder.
 2. Start the task: `schtasks /Run /TN videotag`.
@@ -179,14 +182,16 @@ Opens a local web page. It needs nothing beyond the normal install, and no run n
 
 | Tab | What you see |
 |---|---|
-| (top of the page) | The state of the run: starting, analysing (videos done, current video, time left), planning, writing, finished, or stopped early. For a finished run: how long it took and what it planned or wrote |
-| Overview | Videos by result (confident, suggestion, no match, failed), what has been written to Photos, your corrections, and a table per person |
-| Videos | Every video of the latest report. Search by file name, person, topic or object, filter by result or person, open a video for the best match score and matching frames per person, the English and German description, topics, objects and place. Chips show where each person stands: tagged, suggested, not written yet (dashed), confirmed by you (✓) or removed by you (✕) |
+| (top of the page) | The state of the run: starting, learning the faces of your people (photos done, time left), analysing (videos done, current video, time left; "a slice of N" for a limited dry run), planning, writing, finished, or stopped early. For a finished run: how long it took and what it planned or wrote |
+| Overview | Videos by result (confident, suggestion, no match, failed), what has been written to Photos, your corrections, a table per person, the files that sit in Photos more than once, how far the matching can be trusted, and the spot-check |
+| Videos | Every video of the latest report, or the results of the run in progress as they are made (a "Live view" note says so). Search by file name, person, topic or object, filter by result or person, open a video for the best match score and matching frames per person, the faces the match is based on, the English and German description, topics, objects and place. Chips show where each person stands: tagged, suggested, not written yet (dashed), confirmed by you (✓) or removed by you (✕) |
 | Runs | Every saved report with its results, newest first |
 | Log | The last lines of the run log, following the newest line |
 | Health | The checks of `videotag doctor`, run on request (it logs in to your NAS and takes a few seconds; the first run loads PyTorch into the dashboard process, which holds a little GPU memory until you close the dashboard) |
 
-**Start a run** opens a dialog. A *dry run* reads Photos and writes nothing. *Apply* writes, shows the write cap and the equivalent terminal command, and needs a click on "Apply changes". The dashboard starts the real `videotag run` as a separate process, so it takes the same run lock as any run: it cannot overlap a scheduled one, and it keeps going if you close the dashboard. **`undo` is deliberately only available from the terminal.**
+**Settings** (header) holds the preset every run uses, with what each would save on your library, whether videos are described, and the Re-analyse button. See [speed](#speed-presets-and-settings).
+
+**Start a run** opens a dialog. A *dry run* reads Photos and writes nothing, and can be limited to a slice of the library (a number of videos, only those not analysed yet, or one of your albums; *Load my albums* asks your NAS). *Apply* writes, shows the write cap and the equivalent terminal command, and needs a click on "Apply changes"; it always covers the whole library. The dashboard starts the real `videotag run` as a separate process, so it takes the same run lock as any run: it cannot overlap a scheduled one, and it keeps going if you close the dashboard. **`undo` is deliberately only available from the terminal.**
 
 **Account** (the button in the header) shows which Synology account videotag uses and lets you change it: a new password, or another account or NAS. It checks the login against the NAS first and only then stores it, in the same Windows Credential Manager entry as `videotag credentials set`, so both ways behave identically. See [switching accounts](#switching-accounts).
 
@@ -195,7 +200,8 @@ Notes:
 - **After updating videotag, close the dashboard window and start it again.** A running dashboard keeps the code it started with, while the page files are read fresh, so an old dashboard can serve a newer page. The page notices and shows a warning ("This page is newer than the dashboard that is running"), and the buttons that need the newer code say so instead of doing nothing.
 - The dashboard listens on `127.0.0.1` only. The port is fixed (default 8765) so you can bookmark it; `--port 0` picks a free one. If the port is taken, an earlier dashboard is probably still open.
 - It shows file names and descriptions of your videos, so treat the browser tab like the photos themselves. See [security](security.md#the-dashboard).
-- Progress comes from the run log (`run started`, `library: ...`, one line per video). A log from before the dashboard existed has no such markers, so the first run after installing only fills them in.
+- Progress comes from the run log (`run started`, `references: ...`, `library: ...`, `slice: ...`, one line per video). A log from before the dashboard existed has no such markers, so the first run after installing only fills them in.
+- While a run is going, the Videos and Overview tabs show its results as they are made (`reports\current-run.jsonl`). A run that died leaves that file behind; it is only shown for a run that is still going and began after it, and it never counts as a report.
 
 ## Switching accounts
 
@@ -211,6 +217,45 @@ Everything videotag remembers (the state file, the caches, the reports and the l
 
 **Tags, face links, descriptions and albums that videotag wrote stay in Photos** when you switch away. To remove them, run `videotag undo` while that account is still active, before switching.
 
+## Speed: presets and settings
+
+Every video is cut into frames before the faces are looked for. The **preset** says how densely:
+
+| Preset | Rule | Use it when |
+|---|---|---|
+| `thorough` (default) | 2 frames a second throughout | You want exactly what earlier versions did |
+| `balanced` | 2 a second for the first 30 s, then 1 every 2 s | Long clips are slowing the pass down |
+| `fast` | 2 a second for the first 30 s, then 1 every 4 s | Same, and speed matters most |
+
+On the first real library (1,553 videos, a median clip of 16 s) the longest 7% of the clips held 45% of all frames, so `balanced` cuts about 37% of the frames and `fast` about 44%. Clips of 30 s or less are cut the same under every preset. The Settings dialog shows the saving for **your** library, worked out from the results already saved.
+
+**A preset only applies to videos that have no saved result.** Results you already have are kept, whatever preset is chosen; each remembers the rule it was made under. To redo them on purpose, use **Re-analyse** in the Settings dialog (it shows how many videos it touches and about how long it takes before you press it) or `videotag run --reanalyse`. That is a dry run: it re-reads those videos and writes nothing to Photos.
+
+The **settings file** (`settings.json` in the data folder; the Settings dialog or `videotag settings` writes it) holds the standing choices, the preset and whether videos are described, and serves the dashboard, the terminal and a scheduled task alike. A flag on the command line wins for that run (`--preset fast`, `--describe`, `--no-describe`). By design the file never holds how a run writes (`--apply`, `--max-writes`) or what it covers (`--limit`, `--new-only`, `--album`): a file that contains such a choice is refused with a message, so a saved file can never switch writing on or quietly shorten a scheduled run.
+
+## Looking at part of the library
+
+To see what the tool would do without waiting for the whole library, a **dry run** can look at a slice. In the dashboard's run dialog, or on the command line:
+
+```
+videotag run --limit 20                 # the first 20 videos
+videotag run --limit 20 --new-only      # the first 20 that have no saved result yet: run it again for the next 20
+videotag albums                         # lists your own albums with their numbers
+videotag run --album 12 --limit 50      # only videos of one of your albums (not the per-person albums videotag makes)
+```
+
+"Not analysed yet" means the video has its saved results at any frame rate (and a description, if descriptions are on), so changing the preset never makes every video look new. A slice's report holds only that slice, and the dashboard keeps showing the newest report. **A slice is for dry runs only**: `--apply` with `--limit`, `--new-only` or `--album` is refused, and a real run always covers the whole library. The long first step (the reference faces) still runs, but it is kept between runs.
+
+## Checking that the matches are right
+
+Everything here lives in the dashboard's Overview and Videos tabs and needs no NAS.
+
+- **Open in Photos.** A video's file name, in the Videos tab and in the spot-check, is a link that opens that video in the Photos web app in a new browser tab (`https://<your NAS>/?launchApp=SYNO.Foto.AppInstance#/personal_space/folder/<folder>/item/<video>`, the address Photos itself shows for a video opened from its folder). It works on any report, dry run or applied, and needs no person. It is shown only while the saved results belong to the account videotag is logged in as (otherwise it would open another library), and only for reports made since the link was added: older reports did not record the folder, so a new dry run fills it in.
+- **Faces behind a match.** Open a video in the Videos tab: under each person the best few faces that made it a match are shown (the crops are kept in `state\evidence` and never uploaded). A video that was analysed before crops existed gets them the next time a run sees that it matches someone, which downloads it once more.
+- **Spot-check.** *Draw a sample* picks a random few matches per person (confident ones and suggestions separately) from the latest report. Click a file name to open the video in Photos and look. Matches you already confirmed or removed in Photos, copies of a file and failed videos are left out.
+- **How far the matching can be trusted.** Worked out by every run from the reference faces: how many there are and of what kind, the threshold, whether confident tags are allowed, how many of a person's own faces would be recognised, and which people's faces resemble each other (the thresholds are raised to keep those apart).
+- **The same file more than once.** A file that sits in Photos under two video numbers (same name, size and time) is analysed once and both videos get the same tags and description. The Overview lists them so you can delete the extra copy in Photos; videotag never deletes a video.
+
 ## Commands and options
 
 | Command | What it does |
@@ -220,6 +265,8 @@ Everything videotag remembers (the state file, the caches, the reports and the l
 | `videotag run --apply` | Same, and writes tags, face links, descriptions and albums |
 | `videotag undo` | Removes everything the tool created, nothing else |
 | `videotag doctor` | Health check for an unattended run (exit code 1 if something is broken) |
+| `videotag settings [--preset P] [--describe / --no-describe]` | Show or change the saved settings every run uses |
+| `videotag albums` | List your own albums with their numbers, for `run --album` |
 | `videotag credentials set / status / delete / migrate` | Manage the stored NAS login |
 | `videotag refs` | Show the reference faces found per person and their source |
 | `videotag calibrate` | Per-person thresholds, leave-one-out scores, and a local video control |
@@ -230,18 +277,22 @@ Everything videotag remembers (the state file, the caches, the reports and the l
 |---|---|---|
 | `--apply` | off | Write to Photos |
 | `--max-writes N` | 100 | Most changes written per kind per run |
-| `--fps F` | 2 | Frames analysed per second of video |
+| `--preset P` | saved setting, else `thorough` | `thorough`, `balanced` or `fast`: how densely videos without a saved result are cut into frames |
+| `--reanalyse` | off | Also redo the saved results that were made under another preset |
 | `--min-frames N` | 2 | Matching frames needed for a confident tag |
 | `--threshold X` | calibrated per person | One similarity for everyone instead (floor 0.363) |
-| `--no-describe` | off | Skip the descriptions; the model is never loaded |
+| `--describe` / `--no-describe` | saved setting, else on | Write descriptions, or skip them (the model is never loaded) |
+| `--limit N` | all | Dry run only: look at the first N videos |
+| `--new-only` | off | Dry run only: skip videos that already have a saved result |
+| `--album ID` | whole library | Dry run only: only the videos of this album of yours |
 
 Exit codes: `0` ok, `1` error (message printed and logged), `2` another run holds the lock.
 
 ## Maintenance
 
-**Update:** `git pull`, then `pip install --no-user -e ".[describe]"`, then `videotag doctor`. Existing state, caches and descriptions keep working. If a future version changes the description format, it recognises the old one and rewrites it.
+**Update:** `git pull`, then `pip install --no-user -e ".[describe]"`, then `videotag doctor`. Existing state, caches and descriptions keep working: saved results made before presets existed are read as `thorough`, so nothing is analysed again. The first run after updating reads the reference photos once more to save their faces, and downloads each video that matches someone once more to cut its face crops. If a future version changes the description format, it recognises the old one and rewrites it.
 
-**Back up** `state\state.json` in the data folder. It records what the tool wrote and your rejections and confirmations; losing it means the tool no longer knows which tags are its own. Caches (`state\faces`, `state\describe`, `cache`) can be deleted at any time and are rebuilt.
+**Back up** `state\state.json` in the data folder. It records what the tool wrote and your rejections and confirmations; losing it means the tool no longer knows which tags are its own. Caches (`state\faces`, `state\describe`, `state\reffaces`, `state\evidence`, `cache`) can be deleted at any time and are rebuilt; deleting `state\reffaces` makes the next run read the reference photos again, which is the slow first step.
 
 **Move the data folder:** set the `VIDEOTAG_HOME` environment variable (for the user, and for the scheduled task) and move the folder. Default: `%LOCALAPPDATA%\videotag`.
 
@@ -276,3 +327,8 @@ pip uninstall videotag
 | `Name?` videos show up when I search `Name` | Expected: Photos search matches any part of a tag. Search `Name?` to see only suggestions. |
 | Descriptions missing for some videos | Check the log for `describing ... failed`, run `videotag doctor`. An unusable model answer is cached as "tried"; delete `state\describe\<id>.json` to try again. |
 | A person never gets confident tags | They have fewer than 3 reference faces (`videotag refs`). Name more of their photos in Photos. |
+| `settings.json: 'apply' is a choice for one run, not a setting` | The settings file may only hold the preset and `describe`. Remove the other key; use the command line or the run dialog for those. |
+| File names are not links in the Videos tab | The report was made before links existed (run a dry run again, a `--limit 5` one is enough to see it work), or the saved results belong to another account than the login (the dashboard says "Account needs attention"). |
+| `error: --limit, --new-only and --album are for a dry run` | A slice is never applied: a real run covers the whole library. Drop `--apply`, or drop the slice. |
+| No face crops under a match | The video was analysed before crops existed and has not been seen by a run since, or it matches nobody. The next run cuts them (one more download of that video). If the log says `evidence of N ... no crops kept` or `could not be made`, the crops cannot be cut for that video's current faces: that is remembered (`state\evidence\<id>\skipped.txt`) so the video is not fetched on every run, and tried again when the video or its faces change. Delete `state\evidence` to try everything again. |
+| The dashboard shows "This page is newer than the dashboard that is running" | Close the `videotag gui` window and start it again after an update. |

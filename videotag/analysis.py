@@ -7,6 +7,9 @@ model needs, so running ahead costs next to nothing on disk.
 
 While a pass is running only the helper uses `client` and `engine`, and only the calling thread uses the model. Results
 are the same as handling one video at a time, and they come back in library order.
+
+A file that sits in the library under two ids (same name, size and time) is a twin pair: it is fetched and described once,
+and the other id gets a copy of the result, saved under its own id too so that it counts as analysed from then on.
 """
 import logging
 import queue
@@ -15,12 +18,13 @@ import subprocess
 import tempfile
 import threading
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from . import descache, facecache
-from .describe import FRAMES, Describer, Description, evenly
+from .describe import FRAMES, Describer, Description, evenly, evenly_in_time
 from .faces import Face, FaceEngine
+from .sampling import Sampling
 from .scanner import video_frames
 from .synology import PhotosClient, SynologyError
 
@@ -37,6 +41,8 @@ class Outcome:
     faces: list[list[Face]] | None = None
     description: Description | None = None
     error: Exception | None = None
+    sampling: Sampling | None = None  # how the frames behind `faces` were cut: a frame index means nothing without it
+    twin_of: int | None = None        # the id of the video whose result this one shares: the same file under another id
 
 
 @dataclass
@@ -44,6 +50,7 @@ class _Prepared:
     video: dict
     faces: list[list[Face]] | None = None
     description: Description | None = None
+    sampling: Sampling | None = None
     frames: list[Path] | None = None                   # what the model is to look at; None when it has nothing to do
     folder: tempfile.TemporaryDirectory | None = None  # holds `frames`
     error: Exception | None = None
@@ -74,27 +81,55 @@ def _describe(describer: Describer, video: dict, frames: list[Path]) -> Descript
     return description
 
 
-def _prepare(client: PhotosClient, engine: FaceEngine, describer: Describer | None, video: dict, fps: float) -> _Prepared:
+def _model_frames(frames: list[Path], sampling: Sampling) -> list[Path]:
+    """The frames the model looks at, spread over the whole clip in time whatever the rule."""
+    if sampling.uniform:
+        return evenly(frames, FRAMES)
+    return evenly_in_time(frames, sampling.times(len(frames)), FRAMES)
+
+
+def _keep_evidence(evidence, video: dict, frames: list[Path], faces: list[list[Face]]) -> None:
+    """The crops are a convenience: failing to make them must never cost the video its results."""
+    try:
+        evidence.keep(video, frames, faces)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("evidence of %s could not be kept: %s: %s", video["id"], type(exc).__name__, exc)
+
+
+def _prepare(client: PhotosClient, engine: FaceEngine, describer: Describer | None, video: dict, sampling: Sampling,
+             reanalyse: bool, evidence=None) -> _Prepared:
     """Everything about one video that does not need the model, from the caches where possible.
 
-    The video is downloaded at most once, and only if something is missing from the caches.
+    The video is downloaded at most once, and only if something is missing from the caches: faces, a description, or the
+    crops of the faces that made a match (`evidence`). A saved result is used whatever rule made it, unless `reanalyse`
+    asks for the ones made under another rule to be redone. The video is cut once, under the rule of its faces, so that a
+    frame number means the same frame to the crops and to the model.
     """
-    face_key = facecache.cache_key(video, fps)
-    faces = facecache.load(video["id"], face_key)
+    saved = facecache.load(video["id"], video)
+    if reanalyse and saved is not None and saved.sampling != sampling:
+        saved = None
     described, description = descache.load(video["id"], descache.cache_key(video)) if describer else (True, None)
-    prepared = _Prepared(video, faces, description)
-    if faces is not None and described:
+    prepared = _Prepared(video, saved.faces if saved else None, description, saved.sampling if saved else None)
+    needs_crops = evidence is not None and saved is not None and evidence.missing(video, saved.faces)
+    if saved is not None and described and not needs_crops:
         return prepared
+    rule = saved.sampling if saved is not None else sampling
     try:
-        with video_frames(client, video, fps) as frames:
-            if faces is None:
-                prepared.faces = [engine.faces(frame) for frame in frames]
-                facecache.save(video["id"], face_key, prepared.faces)
+        with video_frames(client, video, rule) as frames:
+            if saved is None:
+                prepared.faces, prepared.sampling = [engine.faces(frame) for frame in frames], sampling
+                facecache.save(video["id"], video, prepared.faces, sampling)
+            if evidence is not None and (saved is None or needs_crops):
+                _keep_evidence(evidence, video, frames, prepared.faces)
             if not described:
                 prepared.folder = tempfile.TemporaryDirectory()
-                prepared.frames = [Path(shutil.copy2(frame, prepared.folder.name)) for frame in evenly(frames, FRAMES)]
+                prepared.frames = [Path(shutil.copy2(frame, prepared.folder.name)) for frame in _model_frames(frames, rule)]
     except SKIPPABLE as exc:
         prepared.discard()
+        if saved is not None and described:
+            # the video was only fetched for its crops: the saved results stand, whatever happened to the download
+            log.warning("evidence of %s could not be made, the video could not be fetched or cut: %s", video["id"], exc)
+            return _Prepared(video, saved.faces, description, saved.sampling)
         return _Prepared(video, error=exc)
     except BaseException:
         prepared.discard()
@@ -110,7 +145,7 @@ def _finish(describer: Describer | None, prepared: _Prepared) -> Outcome:
         description = prepared.description
         if prepared.frames:
             description = _describe(describer, prepared.video, prepared.frames)
-        return Outcome(prepared.video, prepared.faces, description)
+        return Outcome(prepared.video, prepared.faces, description, sampling=prepared.sampling)
     finally:
         prepared.discard()
 
@@ -167,16 +202,59 @@ class _Helper:
             self._put(_Failed(exc))
 
 
+def _twin_key(video: dict) -> tuple:
+    return video["filename"], video["filesize"], video["time"]
+
+
+def _first_of_each(videos: list[dict]) -> tuple[list[dict], dict[int, int]]:
+    """The videos to analyse (the first of each set of twins) and, for every later twin, the id of its first."""
+    firsts, first_with, original_of = [], {}, {}
+    for video in videos:
+        original = first_with.setdefault(_twin_key(video), video["id"])
+        if original == video["id"]:
+            firsts.append(video)
+        else:
+            original_of[video["id"]] = original
+    return firsts, original_of
+
+
+def _copy_to_twin(original: Outcome, twin: dict) -> Outcome:
+    """The twin's own result: the original's, saved under the twin's id so the twin never needs fetching on its own."""
+    if original.error is None:
+        facecache.save(twin["id"], twin, original.faces, original.sampling)
+        if original.description is not None:
+            descache.save(twin["id"], descache.cache_key(twin), original.description)
+    return replace(original, video=twin, twin_of=original.video["id"])
+
+
+def is_analysed(video: dict, describe: bool) -> bool:
+    """Whether the video already has its saved results. The sampling rule that made them does not matter."""
+    if facecache.load(video["id"], video) is None:
+        return False
+    return not describe or descache.load(video["id"], descache.cache_key(video))[0]
+
+
 def analyse_videos(client: PhotosClient, engine: FaceEngine, describer: Describer | None, videos: Iterable[dict],
-                   fps: float, prefetch: int = PREFETCH) -> Iterator[Outcome]:
+                   sampling: Sampling, prefetch: int = PREFETCH, reanalyse: bool = False, evidence=None) -> Iterator[Outcome]:
     """One Outcome per video, in order. A video that cannot be fetched or cut comes back with its error and the pass
     goes on; any other error is raised when its turn comes. Close the iterator to stop early (`contextlib.closing`)."""
-    helper = _Helper(lambda video: _prepare(client, engine, describer, video, fps), videos, prefetch)
+    videos = list(videos)
+    firsts, original_of = _first_of_each(videos)
+    twinned = set(original_of.values())
+    helper = _Helper(lambda video: _prepare(client, engine, describer, video, sampling, reanalyse, evidence), firsts, prefetch)
     helper.start()
+    outcomes_with_twins: dict[int, Outcome] = {}
     try:
-        while (item := helper.get()) is not _END:
+        for video in videos:
+            if video["id"] in original_of:
+                yield _copy_to_twin(outcomes_with_twins[original_of[video["id"]]], video)
+                continue
+            item = helper.get()
             if isinstance(item, _Failed):
                 raise item.error
-            yield _finish(describer, item)
+            outcome = _finish(describer, item)
+            if video["id"] in twinned:
+                outcomes_with_twins[video["id"]] = outcome
+            yield outcome
     finally:
         helper.close()

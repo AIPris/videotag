@@ -16,6 +16,8 @@ TAIL_BYTES = 1_500_000  # the log rotates at 1 MB, so this reads all of one log 
 _LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) (\w+) (.*)$")
 _STARTED = re.compile(r"^run started: (dry run|apply)$")
 _LIBRARY = re.compile(r"^library: \d+ photos, (\d+) videos$")
+_SLICE = re.compile(r"^slice: (\d+) of (\d+) videos$")
+_REFERENCES = re.compile(r"^references: (\d+) of (\d+) photos$")
 _VIDEO = re.compile(r"^(\d+ .*?)( frames=\d+ faces=\d+ \|.*|: .*)$")
 _PLANNED = re.compile(r"^(\d+) tag change\(s\) planned")
 _WRITTEN = {"tags": re.compile(r"^(\d+) tag change\(s\) written$"), "faces": re.compile(r"^(\d+) face change\(s\) written$"),
@@ -26,6 +28,17 @@ _WRITTEN = {"tags": re.compile(r"^(\d+) tag change\(s\) written$"), "faces": re.
 def started_message(apply: bool) -> str:
     """The first line of every run; `last_run` looks for exactly this."""
     return f"run started: {'apply' if apply else 'dry run'}"
+
+
+def slice_message(picked: int, of: int) -> str:
+    """Logged when a dry run looks at part of the library; the videos it counts progress against."""
+    return f"slice: {picked} of {of} videos"
+
+
+def references_message(done: int, total: int) -> str:
+    """Logged while the named people's reference faces are built. Like every line that is not about a video, it must
+    not start with digits (`_VIDEO` counts those), which the tests pin."""
+    return f"references: {done} of {total} photos"
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,9 @@ class RunLog:
     written: dict[str, int] | None     # what an apply run wrote, by kind
     finished: bool
     remaining_seconds: float | None
+    references: tuple[int, int] | None = None   # photos done and in all, while the reference faces are built
+    references_remaining_seconds: float | None = None
+    slice_of: int | None = None                # the library's size when the run looks at a slice of it
 
 
 def parse_lines(text: str) -> list[LogLine]:
@@ -87,12 +103,14 @@ def read_lines(path: Path, backups: int = LOG_BACKUPS) -> list[LogLine]:
     return lines
 
 
-def _phase(mode: str, total: int | None, planned: bool, finished: bool) -> str:
+def _phase(mode: str, total: int | None, planned: bool, finished: bool, learning: bool) -> str:
     if finished:
         return "Finished"
     if planned:
         return "Writing to Photos" if mode == "apply" else "Planning changes"
-    return "Reading the library and learning the faces" if total is None else "Analysing videos"
+    if total is not None:
+        return "Analysing videos"
+    return "Learning the faces of your people" if learning else "Reading the library and learning the faces"
 
 
 def last_run(lines: list[LogLine], now: datetime) -> RunLog | None:
@@ -105,11 +123,18 @@ def last_run(lines: list[LogLine], now: datetime) -> RunLog | None:
     total, library_time, last_video_time, current = None, None, None, None
     done = errors = 0
     planned_tags, written, ended = None, {}, None
+    references, references_first, references_last, slice_of = None, None, None, None
     for line in run[1:]:
         library = _LIBRARY.match(line.text)
         video = _VIDEO.match(line.text)
-        if library:
-            total, library_time = int(library[1]), line.time
+        progress, picked = _REFERENCES.match(line.text), _SLICE.match(line.text)
+        if progress:
+            references, references_last = (int(progress[1]), int(progress[2])), line.time
+            references_first = references_first or line.time
+        elif picked:
+            total, slice_of = int(picked[1]), int(picked[2])
+        elif library:
+            total, library_time = (total if slice_of is not None else int(library[1])), line.time
         elif video and line.level in ("INFO", "ERROR"):
             done, current, last_video_time = done + 1, video[1], line.time
         elif _PLANNED.match(line.text):
@@ -123,5 +148,10 @@ def last_run(lines: list[LogLine], now: datetime) -> RunLog | None:
     remaining = None
     if ended is None and total is not None and done:
         remaining = (last_video_time - library_time).total_seconds() / done * max(total - done, 0)
-    return RunLog(mode, run[0].time, ended, _phase(mode, total, planned_tags is not None, ended is not None), total, done,
-                  current, errors, planned_tags, written or None, ended is not None, remaining)
+    learning_remaining = None
+    if total is None and references and references[0] and references[0] < references[1]:
+        pace = (references_last - references_first).total_seconds() / references[0]
+        learning_remaining = pace * (references[1] - references[0])
+    phase = _phase(mode, total, planned_tags is not None, ended is not None, references is not None)
+    return RunLog(mode, run[0].time, ended, phase, total, done, current, errors, planned_tags, written or None, ended is not None,
+                  remaining, references, learning_remaining, slice_of)

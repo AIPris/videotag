@@ -51,6 +51,18 @@ def evenly(frames: list[Path], count: int) -> list[Path]:
     return [frames[round(i * (len(frames) - 1) / (count - 1))] for i in range(count)]
 
 
+def evenly_in_time(frames: list[Path], times: list[float], count: int) -> list[Path]:
+    """`count` frames at evenly spaced moments of the video, when the frames are not evenly spaced themselves.
+
+    `times` says where each frame sits. Each moment gets the frame nearest to it; a frame is never handed over twice."""
+    if len(frames) <= count:
+        return frames
+    first, last = times[0], times[-1]
+    nearest = (min(range(len(frames)), key=lambda index: abs(times[index] - (first + step * (last - first) / (count - 1))))
+               for step in range(count))
+    return [frames[index] for index in dict.fromkeys(nearest)]
+
+
 def _text(value) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 

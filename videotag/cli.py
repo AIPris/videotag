@@ -1,4 +1,4 @@
-"""Command line: run, undo, refs, calibrate, credentials, doctor, gui."""
+"""Command line: run, albums, undo, refs, calibrate, settings, credentials, doctor, gui."""
 import argparse
 import json
 import logging
@@ -8,7 +8,9 @@ from contextlib import nullcontext
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
+from . import config, settings
 from .accounts import AccountError, claim_data
+from .accuracy import ACCURACY_NAME
 from .admin import (
     cmd_credentials_delete,
     cmd_credentials_migrate,
@@ -18,18 +20,22 @@ from .admin import (
 )
 from .albums import delete_albums
 from .calibration import calibrate_person, leave_one_out
-from .config import DEFAULT_MAX_WRITES, DEFAULT_PORT, LOG_BACKUPS, LOG_FILE, LOG_MAX_BYTES, REPORTS_DIR
+from .config import DEFAULT_MAX_WRITES, DEFAULT_PORT, EVIDENCE_DIR, LOG_BACKUPS, LOG_FILE, LOG_MAX_BYTES, REPORTS_DIR
 from .credentials import CredentialError, load_credentials
 from .describe import Describer
 from .descriptions import delete_descriptions
 from .facelinks import delete_faces
 from .faces import FaceEngine
 from .library import load_library
+from .live import LIVE_NAME, LiveRun
 from .lock import AlreadyRunning, single_run
 from .matcher import DEFAULT_MATCH, DEFAULT_MIN_FRAMES
 from .pipeline import RunOptions, run
 from .references import build_references
 from .runlog import started_message
+from .sampling import DEFAULT_PRESET, PRESETS, Sampling, preset_named
+from .settings import SettingsError
+from .slices import Slice, SliceError, own_albums
 from .state import State, StateError
 from .synology import PhotosClient, SynologyError
 from .tagging import undo_all
@@ -55,13 +61,40 @@ def _prepare(client: PhotosClient):
     return engine, library, build_references(client, engine, library.photos)
 
 
+def _positive_whole_number(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive whole number")
+    return value
+
+
+def _slice_of(args) -> Slice:
+    return Slice(args.limit, args.new_only, args.album)
+
+
 def cmd_run(client: PhotosClient, args) -> None:
-    options = RunOptions(args.apply, args.fps, args.min_frames, args.max_writes, args.threshold, not args.no_describe)
-    rows = run(client, FaceEngine(), Describer() if options.describe else None, options, State.load())
+    chosen = settings.resolve(settings.load(), args.preset, args.describe)
+    options = RunOptions(args.apply, preset_named(chosen.preset), args.min_frames, args.max_writes, args.threshold,
+                         chosen.describe, args.reanalyse, _slice_of(args))
+    live = LiveRun(REPORTS_DIR / LIVE_NAME)
+    rows = run(client, FaceEngine(), Describer() if options.describe else None, options, State.load(), live,
+               evidence_dir=EVIDENCE_DIR, accuracy_file=REPORTS_DIR / ACCURACY_NAME)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     report = REPORTS_DIR / f"run-{datetime.now():%Y%m%d-%H%M%S}.json"
     report.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    live.finish()  # the report holds every row now
     logging.getLogger("videotag").info("report: %s", report)
+
+
+def cmd_albums(client: PhotosClient, args) -> None:
+    albums = own_albums(client, State.load())
+    for album in sorted(albums, key=lambda album: album.get("name", "").lower()):
+        print(f"{album['id']:>8}  {album.get('name', '')}")
+    if not albums:
+        print("no albums of yours")
 
 
 def cmd_undo(client: PhotosClient, args) -> None:
@@ -95,7 +128,7 @@ def cmd_calibrate(client: PhotosClient, args) -> None:
         if refs.size < 2:
             print(f"{refs.name}: only {refs.size} reference face, cannot calibrate")
             continue
-        result = calibrate_person(client, engine, refs, sets, photos_by_id, args.fps)
+        result = calibrate_person(client, engine, refs, sets, photos_by_id, Sampling(args.fps))
         confident = "allowed" if result.can_auto else "NOT allowed: too few"
         print(f"== {result.name} ({refs.size} references, confident tags {confident})")
         print(f"same person (leave-one-out): {_spread(result.positives)}")
@@ -107,6 +140,16 @@ def cmd_calibrate(client: PhotosClient, args) -> None:
         else:
             best = "no face found" if control.best is None else f"best {control.best:.3f}"
             print(f"video control              : {control.decision.value} ({best}, {control.hit_frames} matching frames)")
+
+
+def cmd_settings(client, args) -> None:
+    saved = settings.load()
+    if args.preset is not None or args.describe is not None:
+        saved = settings.resolve(saved, args.preset, args.describe)
+        settings.save(saved)
+    print(f"preset: {saved.preset}")
+    print(f"describe: {'yes' if saved.describe else 'no'}")
+    print(f"kept in {config.SETTINGS_FILE}; a flag on `videotag run` overrides these for that run")
 
 
 def cmd_gui(client, args) -> int:
@@ -121,16 +164,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = commands.add_parser("run", help="one unattended pass over all videos; dry run unless --apply")
     run_parser.add_argument("--apply", action="store_true", help="write tags to Photos (default: report only)")
-    run_parser.add_argument("--fps", type=float, default=2.0, help="frames sampled per second of video")
+    run_parser.add_argument("--preset", choices=list(PRESETS), default=None,
+                            help="how densely videos without a saved result are cut into frames (saved setting, else "
+                                 f"{DEFAULT_PRESET}); saved results keep the rule they were made under")
+    run_parser.add_argument("--reanalyse", action="store_true",
+                            help="also redo the saved results that were made under another preset")
+    run_parser.add_argument("--limit", type=_positive_whole_number, default=None,
+                            help="dry run only: look at this many videos (the first ones, in library order)")
+    run_parser.add_argument("--new-only", action="store_true",
+                            help="dry run only: skip videos that already have a saved result, whatever preset made it")
+    run_parser.add_argument("--album", type=int, default=None, metavar="ID",
+                            help="dry run only: only the videos of this album of yours (`videotag albums` lists them)")
     run_parser.add_argument("--min-frames", type=int, default=DEFAULT_MIN_FRAMES,
                             help="matching frames needed for a confident tag")
     run_parser.add_argument("--max-writes", type=int, default=DEFAULT_MAX_WRITES, help="most tag changes written per run")
     run_parser.add_argument("--threshold", type=float, default=None,
                             help=f"use this similarity for everyone instead of the calibrated values (floor is {DEFAULT_MATCH})")
-    run_parser.add_argument("--no-describe", action="store_true",
-                            help="skip the bilingual descriptions (the vision-language model is not loaded)")
+    run_parser.add_argument("--describe", action=argparse.BooleanOptionalAction, default=None,
+                            help="write bilingual descriptions (saved setting, else yes); --no-describe never loads the "
+                                 "vision-language model")
     run_parser.set_defaults(run=cmd_run, unattended=True)
 
+    commands.add_parser("albums", help="list your own albums with their ids, for `run --album`").set_defaults(run=cmd_albums)
     commands.add_parser("undo", help="remove every tag, face link, description block and album this tool created"
                         ).set_defaults(run=cmd_undo, unattended=True)
     commands.add_parser("refs", help="show the reference faces found for each named person").set_defaults(run=cmd_refs)
@@ -142,6 +197,12 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--port", type=int, default=DEFAULT_PORT, help="port on 127.0.0.1 (0 picks a free one)")
     gui.add_argument("--no-browser", action="store_true", help="do not open the page in your browser")
     gui.set_defaults(run=cmd_gui, needs_client=False)
+
+    settings_parser = commands.add_parser("settings", help="show or change the saved settings every run uses")
+    settings_parser.add_argument("--preset", choices=list(PRESETS), default=None, help="save this preset")
+    settings_parser.add_argument("--describe", action=argparse.BooleanOptionalAction, default=None,
+                                 help="save whether videos are described")
+    settings_parser.set_defaults(run=cmd_settings, needs_client=False)
 
     commands.add_parser("doctor", help="check that everything an unattended run needs is in place"
                         ).set_defaults(run=cmd_doctor, needs_client=False)
@@ -160,7 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "run" and args.apply and _slice_of(args).narrows:
+        parser.error("--limit, --new-only and --album are for a dry run: a real run (--apply) always covers the whole library")
     unattended = getattr(args, "unattended", False)
     if unattended:
         _setup_logging()
@@ -177,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     except AlreadyRunning as exc:
         print(f"skipped: {exc}")
         return 2
-    except (SynologyError, StateError, CredentialError, AccountError) as exc:
+    except (SynologyError, StateError, CredentialError, AccountError, SettingsError, SliceError) as exc:
         logging.getLogger("videotag").error("%s", exc)
         print(f"error: {exc}")
         return 1

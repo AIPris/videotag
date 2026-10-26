@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from videotag.matcher import Decision, PersonModel, best_sighting, decide, face_similarity, match_video
+from videotag.matcher import Decision, PersonModel, best_sighting, claim, decide, face_similarity, hit_sightings, match_video
 
 
 def unit(*values: float) -> np.ndarray:
@@ -93,3 +93,42 @@ def test_the_best_sighting_is_the_most_similar_face_in_the_video():
 
 def test_no_faces_means_no_sighting():
     assert best_sighting([[], []], alice()) is None
+
+
+# -- which faces are evidence for a person -------------------------------------------------------------
+
+def test_a_face_is_claimed_by_the_person_it_resembles_most_if_that_clears_their_bar():
+    bob = PersonModel(2, "Bob", np.stack([STRANGER_FACE]), 0.8)
+    assert claim(ALICE_FACE, [alice(), bob])[0] == 0 and claim(STRANGER_FACE, [alice(), bob])[0] == 1
+    assert claim(unit(1, 1), [alice(), bob])[0] is None  # resembles nobody enough
+    assert len(claim(ALICE_FACE, [alice(), bob])[1]) == 2
+
+
+def test_the_sightings_of_a_person_are_their_hit_frames_best_first_one_per_frame():
+    frames = [seen(unit(1, 0.3)), seen(ALICE_FACE, unit(1, 0.25)), seen(STRANGER_FACE), seen(unit(1, 0.1))]
+    sightings = hit_sightings(frames, [alice()], 0, count=3)
+    by_similarity = sorted([0, 1, 3], key=lambda i: -max(face_similarity(f.embedding, ALICE_REFS) for f in frames[i]))
+    assert [s.frame_index for s in sightings] == by_similarity  # frame 2 holds only a stranger; frame 1 counts once
+    assert [s.similarity for s in sightings] == sorted((s.similarity for s in sightings), reverse=True)
+
+
+def test_there_are_no_more_sightings_than_asked_for():
+    assert len(hit_sightings([seen(ALICE_FACE)] * 5, [alice()], 0, count=2)) == 2
+
+
+def test_a_face_that_belongs_to_someone_else_is_never_evidence_even_if_it_clears_the_bar():
+    alice_like_bob = PersonModel(2, "Bob", np.stack([unit(1, 0.6)]), 0.5)
+    frames = [seen(ALICE_FACE)] * 3
+    assert hit_sightings(frames, [alice(), alice_like_bob], 1) == []
+    assert len(hit_sightings(frames, [alice(), alice_like_bob], 0)) == 3
+
+
+def test_a_resemblance_below_the_bar_is_no_evidence_and_neither_is_an_empty_video():
+    assert hit_sightings([seen(unit(1, 1))], [alice()], 0) == []
+    assert hit_sightings([[], []], [alice()], 0) == []
+
+
+def test_the_sighting_carries_the_box_so_the_crop_can_be_cut():
+    box = (0.5, 0.2, 0.7, 0.4)
+    (sighting,) = hit_sightings([seen(ALICE_FACE, box=box)], [alice()], 0)
+    assert sighting.box == box and sighting.frame_index == 0

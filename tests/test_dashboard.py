@@ -2,9 +2,23 @@ import json
 import os
 from datetime import datetime
 
-from videotag.dashboard import Sources, data_version, history, library_view, log_tail, run_status
+from videotag import facecache
+from videotag.dashboard import (
+    Sources,
+    accuracy_view,
+    data_version,
+    history,
+    library_view,
+    log_tail,
+    run_status,
+    settings_view,
+    spot_check,
+)
 from videotag.describe import Description
+from videotag.live import LiveRun
 from videotag.lock import STALE_AFTER_SECONDS
+from videotag.sampling import PRESETS
+from videotag.settings import Settings
 from videotag.state import State, WrittenTag
 
 NOW = datetime(2026, 10, 25, 15, 19, 40)
@@ -15,7 +29,9 @@ CAT = Description("A cat on a sofa.", "Eine Katze auf einem Sofa.", ("pets",), (
 def sources(tmp_path) -> Sources:
     return Sources(reports_dir=tmp_path / "reports", state_file=tmp_path / "state" / "state.json",
                    describe_dir=tmp_path / "state" / "describe", log_file=tmp_path / "logs" / "videotag.log",
-                   lock_file=tmp_path / "state" / "run.lock")
+                   lock_file=tmp_path / "state" / "run.lock", live_file=tmp_path / "reports" / "current-run.jsonl",
+                   faces_dir=tmp_path / "state" / "faces", evidence_dir=tmp_path / "state" / "evidence",
+                   accuracy_file=tmp_path / "reports" / "accuracy.json")
 
 
 def match(person_id, name, decision, best=0.5, hits=3):
@@ -90,7 +106,7 @@ def test_a_person_entry_carries_the_scores_the_decision_was_based_on(tmp_path):
     src = sources(tmp_path)
     save_report(src, "run-20261025-101500.json", [row(1, [match(7, "Alice", "auto", best=0.612, hits=12)])])
     person = library_view(src)["videos"][0]["people"][0]
-    assert person == {"id": 7, "name": "Alice", "best": 0.612, "hits": 12, "decision": "auto", "status": "planned"}
+    assert person == {"id": 7, "name": "Alice", "best": 0.612, "hits": 12, "decision": "auto", "status": "planned", "crops": []}
 
 
 def test_the_video_decision_is_the_best_of_its_people_or_error(tmp_path):
@@ -175,6 +191,170 @@ def test_the_report_time_comes_from_its_file_name(tmp_path):
     save_report(src, "run-20261025-101500.json", [])
     save_report(src, "run-20261025-151919.json", [])
     assert library_view(src)["report"]["time"] == "2026-10-25T15:19:19"
+
+
+# -- the live view of the run that is going on ----------------------------------------------------------
+
+LIVE_START = datetime(2026, 10, 25, 15, 19, 19)
+
+
+def live_rows(src, *rows, started=LIVE_START):
+    live = LiveRun(src.live_file, clock=lambda: started)
+    live.begin()
+    for one in rows:
+        live.add(one)
+    return live
+
+
+def test_while_a_run_is_going_the_library_shows_the_rows_made_so_far_instead_of_the_old_report(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(50, [match(7, "Alice", "auto")])])
+    live_rows(src, row(1, [match(7, "Alice", "auto")]), row(2, [match(7, "Alice", "review")]),
+              {"video_id": 3, "filename": "clip3.mp4", "error": "download failed"})
+    lock(src, 25)
+    view = library_view(src, NOW)
+    assert view["report"] == {"name": "current run", "time": "2026-10-25T15:19:19", "live": True}
+    assert [video["id"] for video in view["videos"]] == [1, 2, 3]
+    assert view["totals"] == {"videos": 3, "auto": 1, "review": 1, "none": 0, "errors": 1, "described": 0}
+    assert [person["name"] for person in view["people"]] == ["Alice"]
+
+
+def test_a_finished_or_idle_dashboard_shows_the_report_even_if_a_live_file_is_still_there(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(50)])
+    live_rows(src, row(1))
+    assert [video["id"] for video in library_view(src, NOW)["videos"]] == [50]  # no lock: nothing is running
+    assert "live" not in library_view(src, NOW)["report"]
+
+
+def test_the_live_file_of_a_run_that_died_is_not_shown_for_the_next_run(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(50)])
+    live_rows(src, row(1), started=datetime(2026, 10, 25, 9, 0, 0))   # an earlier run that never finished
+    lock(src, 5, taken_ago=5)                                          # the new run took the lock at 15:19:35
+    assert [video["id"] for video in library_view(src, NOW)["videos"]] == [50]
+
+
+def test_a_run_that_has_made_no_row_yet_leaves_the_last_report_on_screen(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(50)])
+    live_rows(src)
+    lock(src, 25)
+    assert [video["id"] for video in library_view(src, NOW)["videos"]] == [50]
+
+
+def test_a_row_the_run_is_writing_right_now_does_not_break_the_view(tmp_path):
+    src = sources(tmp_path)
+    live_rows(src, row(1))
+    with src.live_file.open("a", encoding="utf-8") as out:
+        out.write('{"video_id": 2, "filen')
+    lock(src, 25)
+    assert [video["id"] for video in library_view(src, NOW)["videos"]] == [1]
+
+
+def test_the_live_file_is_not_a_report_and_not_part_of_the_history(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(50)])
+    live_rows(src, row(1))
+    assert [entry["name"] for entry in history(src)] == ["run-20261024-101500.json"]
+    assert library_view(src)["report"]["name"] == "run-20261024-101500.json"
+
+
+def test_the_data_version_changes_when_a_run_writes_its_accuracy_report(tmp_path):
+    src = sources(tmp_path)
+    before = data_version(src)
+    src.accuracy_file.parent.mkdir(parents=True, exist_ok=True)
+    src.accuracy_file.write_text("{}", encoding="utf-8")
+    assert data_version(src) != before
+
+
+def test_the_data_version_changes_with_every_row_the_run_makes(tmp_path):
+    src = sources(tmp_path)
+    live = live_rows(src, row(1))
+    before = data_version(src)
+    live.add(row(2))
+    after = data_version(src)
+    live.finish()
+    assert len({before, after, data_version(src)}) == 3
+
+
+# -- twins ----------------------------------------------------------------------------------------------
+
+def test_twins_are_listed_with_the_file_name_and_every_id_the_file_has(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [
+        row(1, [match(7, "Alice", "auto")], filename="beach.mp4"), row(2),
+        row(3, [match(7, "Alice", "auto")], twin_of=1, filename="beach.mp4"),
+        row(4, twin_of=1, filename="beach.mp4"), row(5, twin_of=2, filename="clip2.mp4")])
+    view = library_view(src)
+    assert view["twins"] == [{"filename": "beach.mp4", "ids": [1, 3, 4]}, {"filename": "clip2.mp4", "ids": [2, 5]}]
+    assert [video["twin_of"] for video in view["videos"]] == [None, None, 1, 1, 2]
+
+
+def test_a_library_without_twins_lists_none(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [row(1), row(2)])
+    assert library_view(src)["twins"] == []
+
+
+# -- evidence, accuracy and the spot-check ---------------------------------------------------------------
+
+def make_crops(src, video_id, *names):
+    folder = src.evidence_dir / str(video_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (folder / name).write_bytes(b"jpeg")
+
+
+def test_a_person_entry_names_the_crops_that_show_why_the_video_matched_them(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [row(1, [match(7, "Alice", "auto"), match(8, "Bob", "review")]),
+                                                  row(2, [match(7, "Alice", "auto")])])
+    make_crops(src, 1, "7-1.jpg", "7-2.jpg", "8-1.jpg")
+    first, second = library_view(src)["videos"]
+    assert [(p["name"], p["crops"]) for p in first["people"]] == [("Alice", ["7-1.jpg", "7-2.jpg"]), ("Bob", ["8-1.jpg"])]
+    assert first["evidence_id"] == 1 and second["people"][0]["crops"] == []
+
+
+def test_a_copy_of_a_file_shows_the_crops_of_the_video_that_was_analysed(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [row(1, [match(7, "Alice", "auto")]),
+                                                  row(2, [match(7, "Alice", "auto")], twin_of=1)])
+    make_crops(src, 1, "7-1.jpg")
+    original, copy = library_view(src)["videos"]
+    assert copy["evidence_id"] == 1 and copy["people"][0]["crops"] == ["7-1.jpg"] and original["evidence_id"] == 1
+
+
+def test_the_accuracy_report_is_read_from_its_file_and_is_nothing_when_missing_or_unreadable(tmp_path):
+    src = sources(tmp_path)
+    assert accuracy_view(src) is None
+    src.accuracy_file.parent.mkdir(parents=True)
+    src.accuracy_file.write_text('{ half written', encoding="utf-8")
+    assert accuracy_view(src) is None
+    report = {"time": "2026-10-26T12:00:00", "people": [], "lookalikes": [], "mixed_up": []}
+    src.accuracy_file.write_text(json.dumps(report), encoding="utf-8")
+    assert accuracy_view(src)["time"] == "2026-10-26T12:00:00"
+
+
+def test_the_accuracy_report_is_not_a_run_report(tmp_path):
+    src = sources(tmp_path)
+    src.accuracy_file.parent.mkdir(parents=True)
+    src.accuracy_file.write_text("{}", encoding="utf-8")
+    assert history(src) == [] and library_view(src)["report"] is None
+
+
+def test_the_spot_check_samples_the_newest_report_and_leaves_out_what_the_user_settled(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [row(1, [match(7, "Alice", "auto")])])
+    save_report(src, "run-20261025-151919.json", [row(n, [match(7, "Alice", "auto")]) for n in range(10, 16)])
+    save_state(src, confirmed={(10, 7)}, rejected={(11, 7)})
+    (alice,) = spot_check(src, 20)
+    assert sorted(item["video_id"] for item in alice["confident"]["sample"]) == [12, 13, 14, 15]
+    assert alice["confident"]["total"] == 4
+
+
+def test_the_spot_check_of_an_empty_data_home_is_empty(tmp_path):
+    assert spot_check(sources(tmp_path), 5) == []
 
 
 # -- history -----------------------------------------------------------------------------------
@@ -294,3 +474,62 @@ def test_the_data_version_changes_when_a_report_or_the_state_changes(tmp_path):
     with_state = data_version(src)
     os.utime(src.state_file, (1_000_000_000, 1_000_000_000))
     assert len({empty, with_report, with_state, data_version(src)}) == 4
+
+
+# -- the phases before the videos, and the settings view -------------------------------------------------
+
+def test_the_run_reports_the_reference_phase_and_how_big_the_library_slice_is(tmp_path):
+    src = sources(tmp_path)
+    log(src, START, "2026-10-25 15:19:20,000 INFO references: 0 of 100 photos",
+        "2026-10-25 15:19:30,000 INFO references: 25 of 100 photos")
+    lock(src, 25)
+    run = run_status(src, NOW)["run"]
+    assert run["phase"] == "Learning the faces of your people"
+    assert run["references"] == {"done": 25, "total": 100, "remaining_seconds": 30}
+    assert run["slice_of"] is None
+
+
+def test_a_slice_shows_how_big_the_whole_library_is(tmp_path):
+    src = sources(tmp_path)
+    log(src, START, LIBRARY, "2026-10-25 15:19:20,100 INFO slice: 2 of 4 videos", FIRST)
+    lock(src, 25)
+    run = run_status(src, NOW)["run"]
+    assert (run["total"], run["slice_of"], run["done"], run["references"]) == (2, 4, 1, None)
+
+
+def save_result(src, video_id, frames, sampling):
+    facecache.save(video_id, {"filesize": video_id, "time": 1}, [[]] * frames, sampling)
+
+
+def test_the_settings_view_carries_the_choice_the_presets_and_what_they_would_save_on_this_library(tmp_path, monkeypatch):
+    src = sources(tmp_path)
+    monkeypatch.setattr(facecache, "FACES_DIR", src.faces_dir)
+    save_result(src, 1, 32, PRESETS["thorough"])
+    save_result(src, 2, 2460, PRESETS["thorough"])
+    view = settings_view(src, Settings("balanced", False), NOW)
+    assert (view["preset"], view["describe"]) == ("balanced", False)
+    assert [(p["name"], p["fps"], p["head_seconds"], p["tail_fps"]) for p in view["presets"]] == [
+        ("thorough", 2.0, None, None), ("balanced", 2.0, 30.0, 0.5), ("fast", 2.0, 30.0, 0.25)]
+    assert view["estimate"]["saving"] == {"thorough": 0, "balanced": 72, "fast": 84}
+    assert view["reanalyse"]["videos"] == 2 and view["reanalyse"]["of"] == 2  # both were cut under thorough, balanced is chosen
+    assert view["reanalyse"]["touched"] == {"thorough": 0, "balanced": 2, "fast": 2}  # and what any other choice would touch
+
+
+def test_the_time_a_re_analysis_might_take_comes_from_the_pace_of_the_last_finished_run(tmp_path, monkeypatch):
+    src = sources(tmp_path)
+    monkeypatch.setattr(facecache, "FACES_DIR", src.faces_dir)
+    save_result(src, 1, 32, PRESETS["thorough"])
+    save_result(src, 2, 32, PRESETS["thorough"])
+    log(src, START, LIBRARY, FIRST, "2026-10-25 15:19:30,000 INFO 2 clip2.mp4 frames=10 faces=8 | Alice=0.5/3:auto", REPORT)
+    reanalyse = settings_view(src, Settings("fast", True), NOW)["reanalyse"]
+    assert reanalyse["videos"] == 2 and reanalyse["pace_seconds"] == 9  # 18 s for 2 videos
+    assert settings_view(sources(tmp_path / "other"), Settings(), NOW)["reanalyse"]["pace_seconds"] is None
+
+
+# -- the folder of a video ------------------------------------------------------------------------------
+
+def test_a_video_carries_its_folder_when_the_report_has_one_and_none_for_an_older_report(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261025-101500.json", [row(1, folder_id=640), row(2)])
+    first, second = library_view(src)["videos"]
+    assert first["folder_id"] == 640 and second["folder_id"] is None

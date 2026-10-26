@@ -7,8 +7,14 @@ from videotag import pipeline
 from videotag.analysis import Outcome
 from videotag.describe import Description
 from videotag.descriptions import extract_block
+from videotag.evidence import Evidence
 from videotag.library import Library
+from videotag.live import LiveRun
+from videotag.live import read as read_live
 from videotag.matcher import PersonModel
+from videotag.references import ReferenceSet, Source
+from videotag.sampling import PRESETS
+from videotag.slices import Slice, SliceError
 from videotag.state import State
 
 
@@ -62,18 +68,19 @@ ALICE_FACE = np.array([1.0, 0.0])
 FRAMES = [[SimpleNamespace(embedding=ALICE_FACE, box=(0.1, 0.1, 0.4, 0.4))]] * 3
 VIDEO = {"id": 1, "filename": "clip.mp4", "filesize": 10, "time": 1, "additional": {"tag": [], "description": ""}}
 CAT = Description("A cat.", "Eine Katze.", ("cat",), ("Katze",), ("cat",), ("Katze",))
+THOROUGH = PRESETS["thorough"]
 
 
 def analysis_of(*outcomes):
     """A stand-in for analyse_videos. A generator, like the real one, so that it can be closed."""
-    def analyse(client, engine, describer, videos, fps):
+    def analyse(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
         yield from outcomes
     return analyse
 
 
 def every_video_with(description):
-    def analyse(client, engine, describer, videos, fps):
-        yield from [Outcome(item, FRAMES, description) for item in videos]
+    def analyse(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        yield from [Outcome(item, FRAMES, description, sampling=THOROUGH) for item in videos]
     return analyse
 
 
@@ -83,11 +90,11 @@ def prepare(monkeypatch, description=CAT, video=VIDEO):
     monkeypatch.setattr(pipeline, "build_references", lambda client, engine, photos: [])
     monkeypatch.setattr(pipeline, "person_models", lambda sets, threshold: [model])
     monkeypatch.setattr(pipeline, "analyse_videos", every_video_with(description))
-    monkeypatch.setattr(pipeline, "frame_crop", lambda client, video, fps, sighting: b"jpeg")
+    monkeypatch.setattr(pipeline, "frame_crop", lambda client, video, sampling, sighting: b"jpeg")
 
 
 def run(client, state, apply):
-    options = pipeline.RunOptions(apply=apply, fps=2.0, min_frames=2, max_writes=10)
+    options = pipeline.RunOptions(apply=apply, sampling=THOROUGH, min_frames=2, max_writes=10)
     return pipeline.run(client, None, object(), options, state)
 
 
@@ -188,7 +195,7 @@ def test_a_video_that_could_not_be_fetched_becomes_an_error_row_and_the_run_goes
     broken = {**VIDEO, "id": 2, "filename": "bad.mp4"}
     monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [broken, VIDEO]))
     monkeypatch.setattr(pipeline, "analyse_videos", analysis_of(Outcome(broken, error=RuntimeError("ffmpeg broke")),
-                                                                Outcome(VIDEO, FRAMES, CAT)))
+                                                                Outcome(VIDEO, FRAMES, CAT, sampling=THOROUGH)))
     with caplog.at_level("INFO", logger="videotag"):
         rows = run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
     assert rows[0] == {"video_id": 2, "filename": "bad.mp4", "error": "ffmpeg broke"}
@@ -200,9 +207,9 @@ def test_the_analysis_is_finished_before_anything_is_written_to_photos(tmp_path,
     prepare(monkeypatch)
     finished, seen = [], []
 
-    def analysis(client, engine, describer, videos, fps):
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
         try:
-            yield from [Outcome(item, FRAMES, CAT) for item in videos]
+            yield from [Outcome(item, FRAMES, CAT, sampling=THOROUGH) for item in videos]
         finally:
             finished.append(True)  # the helper thread is joined here; after this only the calling thread uses the client
 
@@ -217,9 +224,9 @@ def test_the_analysis_is_stopped_when_the_run_fails_midway(tmp_path, monkeypatch
     prepare(monkeypatch)
     finished = []
 
-    def analysis(client, engine, describer, videos, fps):
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
         try:
-            yield from [Outcome(item, FRAMES, CAT) for item in videos]
+            yield from [Outcome(item, FRAMES, CAT, sampling=THOROUGH) for item in videos]
         finally:
             finished.append(True)
 
@@ -228,3 +235,226 @@ def test_the_analysis_is_stopped_when_the_run_fails_midway(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="matcher broke"):
         run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
     assert finished == [True]
+
+
+def test_the_face_crop_is_cut_with_the_rule_the_result_was_made_under_not_the_one_in_use_now(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    rules = []
+    monkeypatch.setattr(pipeline, "frame_crop", lambda client, video, sampling, sighting: rules.append(sampling) or b"jpeg")
+    options = pipeline.RunOptions(apply=True, sampling=PRESETS["fast"], min_frames=2, max_writes=10)
+    pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"))
+    assert rules == [THOROUGH]  # the saved result was made under thorough, so its frame 0 is a thorough frame
+
+
+def test_the_rule_in_use_and_the_wish_to_re_analyse_reach_the_analysis(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    seen = []
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        seen.append((sampling, reanalyse))
+        yield from []
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    options = pipeline.RunOptions(apply=False, sampling=PRESETS["balanced"], min_frames=2, max_writes=10, reanalyse=True)
+    pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"))
+    assert seen == [(PRESETS["balanced"], True)]
+
+
+# -- slices ---------------------------------------------------------------------------------------------------
+
+OTHER = {**VIDEO, "id": 2, "filename": "other.mp4"}
+THIRD = {**VIDEO, "id": 3, "filename": "third.mp4"}
+
+
+def prepare_three(monkeypatch):
+    prepare(monkeypatch)
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [VIDEO, OTHER, THIRD]))
+    seen = []
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        seen.append([item["id"] for item in videos])
+        yield from [Outcome(item, FRAMES, CAT, sampling=THOROUGH) for item in videos]
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    return seen
+
+
+def sliced(chosen, state, client=None, **more):
+    options = pipeline.RunOptions(apply=False, sampling=THOROUGH, min_frames=2, max_writes=10, slice=chosen, **more)
+    return pipeline.run(client or RecordingClient(), None, object(), options, state)
+
+
+def test_a_limited_dry_run_analyses_and_reports_only_its_slice(tmp_path, monkeypatch, caplog):
+    seen = prepare_three(monkeypatch)
+    with caplog.at_level("INFO", logger="videotag"):
+        rows = sliced(Slice(limit=2), State(tmp_path / "state.json"))
+    assert seen == [[1, 2]] and [row["video_id"] for row in rows] == [1, 2]
+    assert "slice: 2 of 3 videos" in caplog.text
+    assert "2 tag change(s) planned" in caplog.text  # for the two it looked at, nothing for the third
+
+
+def test_not_analysed_yet_leaves_out_the_videos_that_have_their_results(tmp_path, monkeypatch):
+    seen = prepare_three(monkeypatch)
+    monkeypatch.setattr(pipeline, "is_analysed", lambda video, describe: video["id"] == 1)
+    rows = sliced(Slice(new_only=True), State(tmp_path / "state.json"))
+    assert seen == [[2, 3]] and [row["video_id"] for row in rows] == [2, 3]
+
+
+def test_not_analysed_yet_asks_about_descriptions_only_when_they_are_wanted(tmp_path, monkeypatch):
+    prepare_three(monkeypatch)
+    asked = []
+    monkeypatch.setattr(pipeline, "is_analysed", lambda video, describe: asked.append(describe) or False)
+    sliced(Slice(new_only=True), State(tmp_path / "state.json"), describe=False)
+    assert set(asked) == {False}
+
+
+class AlbumsClient(RecordingClient):
+    def albums(self):
+        return [{"id": 5, "name": "Holiday"}, {"id": 900, "name": "Alice"}]
+
+    def album_item_ids(self, album_id):
+        return {2, 3, 777} if album_id == 5 else {1}
+
+
+def test_an_album_slice_looks_at_the_videos_of_one_of_your_albums(tmp_path, monkeypatch):
+    seen = prepare_three(monkeypatch)
+    rows = sliced(Slice(album_id=5), State(tmp_path / "state.json"), AlbumsClient())
+    assert seen == [[2, 3]] and len(rows) == 2
+
+
+@pytest.mark.parametrize("album_id", [900, 12345])
+def test_an_album_this_tool_made_or_a_missing_one_is_refused_before_the_reference_phase(tmp_path, monkeypatch, album_id):
+    seen = prepare_three(monkeypatch)
+    monkeypatch.setattr(pipeline, "build_references", lambda *args: pytest.fail("the reference phase must not start"))
+    with pytest.raises(SliceError, match="no album"):
+        sliced(Slice(album_id=album_id), State(tmp_path / "state.json", albums={7: 900}), AlbumsClient())
+    assert seen == []
+
+
+def test_a_slice_cannot_be_combined_with_writing_to_photos():
+    with pytest.raises(SliceError, match="dry run"):
+        pipeline.RunOptions(apply=True, sampling=THOROUGH, min_frames=2, max_writes=10, slice=Slice(limit=5))
+
+
+def test_a_run_without_a_slice_covers_the_whole_library_and_logs_no_slice(tmp_path, monkeypatch, caplog):
+    seen = prepare_three(monkeypatch)
+    with caplog.at_level("INFO", logger="videotag"):
+        sliced(Slice(), State(tmp_path / "state.json"))
+    assert seen == [[1, 2, 3]] and "slice:" not in caplog.text
+
+
+# -- the live file ---------------------------------------------------------------------------------------
+
+def test_every_row_reaches_the_live_file_as_soon_as_it_is_made_and_not_before_the_analysis_starts(tmp_path, monkeypatch):
+    prepare_three(monkeypatch)
+    live = LiveRun(tmp_path / "current-run.jsonl")
+    seen = []
+    monkeypatch.setattr(pipeline, "build_references",
+                        lambda *args: seen.append(("references", (tmp_path / "current-run.jsonl").exists())) or [])
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        for item in videos:
+            yield Outcome(item, FRAMES, CAT, sampling=THOROUGH) if item["id"] != 2 else Outcome(item, error=RuntimeError("bad"))
+            seen.append((item["id"], [row["video_id"] for row in read_live(tmp_path / "current-run.jsonl").rows]))
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    options = pipeline.RunOptions(apply=False, sampling=THOROUGH, min_frames=2, max_writes=10)
+    rows = pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"), live)
+    assert seen == [("references", False), (1, [1]), (2, [1, 2]), (3, [1, 2, 3])]
+    assert read_live(tmp_path / "current-run.jsonl").rows == rows  # the same rows the report will hold, errors included
+
+
+def test_a_run_without_a_live_file_works_as_before(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    assert len(run(RecordingClient(), State(tmp_path / "state.json"), apply=False)) == 1
+
+
+def test_a_twin_gets_the_same_matches_and_its_row_says_whose_result_it_shares(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    twin_video = {**VIDEO, "id": 9}
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [VIDEO, twin_video]))
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis_of(Outcome(VIDEO, FRAMES, CAT, sampling=THOROUGH),
+                                                                Outcome(twin_video, FRAMES, CAT, sampling=THOROUGH, twin_of=1)))
+    client = RecordingClient()
+    rows = run(client, State(tmp_path / "state.json"), apply=True)
+    assert "twin_of" not in rows[0] and rows[1]["twin_of"] == 1
+    assert rows[1]["matches"] == rows[0]["matches"]
+    assert sorted(item for item, _ in client.added) == [1, 9]  # both videos are tagged
+
+
+# -- evidence and the accuracy report ---------------------------------------------------------------------
+
+def test_a_run_given_a_folder_for_evidence_hands_the_analysis_a_hook_that_knows_this_runs_people(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    seen = []
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        seen.append(evidence)
+        yield from []
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    options = pipeline.RunOptions(apply=False, sampling=THOROUGH, min_frames=2, max_writes=10)
+    pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"), evidence_dir=tmp_path / "evidence")
+    assert isinstance(seen[0], Evidence)
+    assert seen[0].missing(VIDEO, FRAMES) is True   # Alice is in all three frames: she matches, and has no crops yet
+
+
+def test_a_run_without_an_evidence_folder_keeps_no_crops(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    seen = []
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        seen.append(evidence)
+        yield from []
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
+    assert seen == [None]
+
+
+def test_a_run_writes_the_accuracy_report_of_the_people_it_matched_against(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    alice = ReferenceSet(7, "Alice", np.stack([ALICE_FACE] * 3), [Source("single", n) for n in range(3)])
+    monkeypatch.setattr(pipeline, "build_references", lambda client, engine, photos: [alice])
+    options = pipeline.RunOptions(apply=False, sampling=THOROUGH, min_frames=2, max_writes=10)
+    pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"),
+                 accuracy_file=tmp_path / "accuracy.json")
+    import json
+    saved = json.loads((tmp_path / "accuracy.json").read_text(encoding="utf-8"))
+    assert [(p["name"], p["references"], p["threshold"]) for p in saved["people"]] == [("Alice", 3, 0.5)]
+    assert "time" in saved
+
+
+def test_the_accuracy_report_is_written_before_the_long_analysis_so_it_is_there_even_if_the_run_is_stopped(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    written = []
+
+    def analysis(client, engine, describer, videos, sampling, reanalyse=False, evidence=None):
+        written.append((tmp_path / "accuracy.json").exists())
+        yield from []
+
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis)
+    options = pipeline.RunOptions(apply=False, sampling=THOROUGH, min_frames=2, max_writes=10)
+    pipeline.run(RecordingClient(), None, object(), options, State(tmp_path / "state.json"),
+                 accuracy_file=tmp_path / "accuracy.json")
+    assert written == [True]
+
+
+# -- the folder of a video, for the link into Photos ------------------------------------------------------------
+
+def test_a_row_carries_the_folder_photos_keeps_the_video_in_and_has_none_when_photos_gave_none(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    in_a_folder = {**VIDEO, "folder_id": 640}
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [in_a_folder, OTHER]))
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis_of(Outcome(in_a_folder, FRAMES, CAT, sampling=THOROUGH),
+                                                                Outcome(OTHER, FRAMES, CAT, sampling=THOROUGH)))
+    rows = run(RecordingClient(), State(tmp_path / "state.json"), apply=False)
+    assert rows[0]["folder_id"] == 640 and "folder_id" not in rows[1]
+
+
+def test_an_error_row_carries_the_folder_too(tmp_path, monkeypatch):
+    prepare(monkeypatch)
+    broken = {**VIDEO, "id": 2, "filename": "bad.mp4", "folder_id": 12}
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [broken]))
+    monkeypatch.setattr(pipeline, "analyse_videos", analysis_of(Outcome(broken, error=RuntimeError("ffmpeg broke"))))
+    assert run(RecordingClient(), State(tmp_path / "state.json"), apply=False)[0]["folder_id"] == 12

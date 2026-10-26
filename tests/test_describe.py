@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from videotag.describe import Description, evenly, parse_description
+from videotag.describe import Description, evenly, evenly_in_time, parse_description
 
 
 def answer(**overrides) -> str:
@@ -66,3 +66,16 @@ def test_evenly_spreads_frames_over_the_whole_video():
     frames = [Path(f"f{i}.jpg") for i in range(11)]
     assert evenly(frames, 3) == [frames[0], frames[5], frames[10]]
     assert evenly(frames[:2], 6) == frames[:2]
+
+
+def test_evenly_in_time_picks_the_frames_nearest_to_evenly_spaced_moments_however_the_frames_are_spaced():
+    frames = [Path(f"f{number}.jpg") for number in range(7)]
+    times = [0.0, 1.0, 2.0, 3.0, 4.0, 40.0, 100.0]  # dense at the start, sparse after
+    assert evenly_in_time(frames, times, 3) == [frames[0], frames[5], frames[6]]
+    assert evenly(frames, 3) == [frames[0], frames[3], frames[6]]  # by position it would look at the dense part
+
+
+def test_evenly_in_time_never_hands_over_the_same_frame_twice_and_returns_a_short_clip_whole():
+    frames = [Path(f"f{number}.jpg") for number in range(7)]
+    assert evenly_in_time(frames, [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 100.0], 6) == [frames[0], frames[5], frames[6]]
+    assert evenly_in_time(frames[:2], [0.0, 1.0], 6) == frames[:2]

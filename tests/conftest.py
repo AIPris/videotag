@@ -3,7 +3,7 @@ import pytest
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError
 
-from videotag import accounts
+from videotag import accounts, config
 from videotag.credentials import ENV_NAMES
 
 
@@ -47,4 +47,5 @@ def isolated_data_home(monkeypatch, tmp_path_factory):
     layout = accounts.Layout(state=home / "state", reports=home / "reports", cache=home / "cache", logs=home / "logs",
                              parked=home / "accounts")
     monkeypatch.setattr(accounts, "default_layout", lambda: layout)
+    monkeypatch.setattr(config, "SETTINGS_FILE", home / "settings.json")
     return layout

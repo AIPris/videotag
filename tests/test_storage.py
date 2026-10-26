@@ -2,12 +2,10 @@ import os
 import threading
 import time
 
-import numpy as np
 import pytest
 
-from videotag import descache, facecache
+from videotag import descache
 from videotag.describe import Description
-from videotag.faces import Face
 from videotag.lock import AlreadyRunning, single_run, taken_at
 from videotag.state import State, StateError, WrittenTag
 
@@ -57,30 +55,6 @@ def test_an_unreadable_state_file_stops_the_run_instead_of_being_ignored(tmp_pat
     path.write_text(content, encoding="utf-8")
     with pytest.raises(StateError):
         State.load(path)
-
-
-def make_face(rng, box):
-    return Face(rng.random(128), (box[2] - box[0]) * (box[3] - box[1]), box)
-
-
-def test_face_cache_round_trip_keeps_embeddings_and_positions_including_empty_frames(tmp_path, monkeypatch):
-    monkeypatch.setattr(facecache, "FACES_DIR", tmp_path)
-    rng = np.random.default_rng(0)
-    frames = [[make_face(rng, (0.1, 0.2, 0.3, 0.4))], [],
-              [make_face(rng, (0.5, 0.5, 0.75, 0.9)), make_face(rng, (0.0, 0.0, 0.25, 0.5))]]
-    facecache.save(7, "key", frames)
-    loaded = facecache.load(7, "key")
-    assert [len(f) for f in loaded] == [1, 0, 2]
-    assert np.allclose(loaded[2][1].embedding, frames[2][1].embedding, atol=1e-6)
-    assert np.allclose(loaded[2][0].box, (0.5, 0.5, 0.75, 0.9), atol=1e-6)
-
-
-def test_face_cache_is_ignored_for_another_key_and_handles_zero_frames(tmp_path, monkeypatch):
-    monkeypatch.setattr(facecache, "FACES_DIR", tmp_path)
-    facecache.save(7, "key", [])
-    assert facecache.load(7, "key") == []
-    assert facecache.load(7, "other-key") is None
-    assert facecache.load(8, "key") is None
 
 
 def test_a_second_run_is_refused_while_the_first_holds_the_lock(tmp_path):

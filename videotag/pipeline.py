@@ -2,18 +2,25 @@
 import logging
 from contextlib import closing
 from dataclasses import dataclass
+from pathlib import Path
 
+from . import accuracy
 from .albums import current_albums, execute_albums, plan_album_changes
-from .analysis import analyse_videos
+from .analysis import analyse_videos, is_analysed
 from .calibration import person_models
 from .describe import Describer
 from .descriptions import execute_descriptions, plan_description_changes, sync_description_feedback
+from .evidence import Evidence
 from .facelinks import execute_faces, plan_face_changes, sync_face_feedback, verify_links
 from .faces import FaceEngine
 from .library import load_library
+from .live import LiveRun
 from .matcher import best_sighting, match_video
 from .references import build_references
+from .runlog import slice_message
+from .sampling import Sampling
 from .scanner import frame_crop
+from .slices import Slice, SliceError, album_video_ids, pick_videos
 from .state import State
 from .synology import PhotosClient
 from .tagging import confident_videos, execute, plan_tag_changes, sync_feedback
@@ -24,23 +31,48 @@ log = logging.getLogger("videotag")
 @dataclass(frozen=True)
 class RunOptions:
     apply: bool
-    fps: float
+    sampling: Sampling              # how new videos are cut into frames; saved results keep the rule they were made under
     min_frames: int
     max_writes: int
     threshold: float | None = None  # overrides the calibrated per-person thresholds
     describe: bool = True           # also write bilingual descriptions (needs the vision-language model)
+    reanalyse: bool = False         # redo the saved results that were made under another sampling rule
+    slice: Slice = Slice()          # which videos a dry run looks at; a real run always covers the whole library
+
+    def __post_init__(self) -> None:
+        if self.apply and self.slice.narrows:
+            raise SliceError("a slice is for a dry run: a real run always covers the whole library")
+
+
+def _videos_to_analyse(videos: list[dict], options: RunOptions, album: set[int] | None) -> list[dict]:
+    chosen = options.slice
+    if not chosen.narrows:
+        return videos
+    picked = pick_videos(videos, chosen, album_item_ids=album, analysed=lambda video: is_analysed(video, options.describe))
+    log.info(slice_message(len(picked), len(videos)))  # runlog.py counts progress against this
+    return picked
 
 
 def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, options: RunOptions,
-        state: State) -> list[dict]:
-    """Returns one report row per video. A dry run changes nothing in Photos and saves no state."""
+        state: State, live: LiveRun | None = None, evidence_dir: Path | None = None,
+        accuracy_file: Path | None = None) -> list[dict]:
+    """Returns one report row per video. A dry run changes nothing in Photos and saves no state.
+
+    Each row also goes to `live`, if given, as soon as it is made. With `evidence_dir` the best faces of every match are
+    kept there as crops (they stay on this PC), and `accuracy_file` receives the accuracy report of this run's people."""
     library = load_library(client)
+    chosen = options.slice
+    album = album_video_ids(client, state, chosen.album_id) if chosen.album_id is not None else None  # refuse a bad album early
     sets = build_references(client, engine, library.photos)
     models = person_models(sets, options.threshold)
     for model in models:
         log.info("%s: %d references, threshold %.3f, confident tags %s", model.name, len(model.references),
                  model.threshold, "allowed" if model.can_auto else "not allowed (suggestions only)")
+    if accuracy_file is not None:
+        accuracy.save(accuracy_file, accuracy.report(sets, models))
+    evidence = Evidence(models, options.min_frames, evidence_dir) if evidence_dir is not None else None
     log.info("library: %d photos, %d videos", len(library.photos), len(library.videos))  # cue for runlog.py: analysis starts
+    videos = _videos_to_analyse(library.videos, options, album)
 
     people = {model.person_id: model.name for model in models}
     sync_feedback(state, library.videos, people)
@@ -48,21 +80,35 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
     sync_face_feedback(state, faces_by_video)
     sync_description_feedback(state, library.videos)
 
-    rows, matches, frame_faces_by_video, descriptions = [], {}, {}, {}
-    with closing(analyse_videos(client, engine, describer, library.videos, options.fps)) as outcomes:
+    rows, matches, frame_faces_by_video, descriptions, sampling_by_video = [], {}, {}, {}, {}
+
+    def record(row: dict) -> None:
+        rows.append(row)
+        if live is not None:
+            live.add(row)
+
+    if live is not None:
+        live.begin()
+    with closing(analyse_videos(client, engine, describer, videos, options.sampling, reanalyse=options.reanalyse,
+                                evidence=evidence)) as outcomes:
         for outcome in outcomes:
             video = outcome.video
             row = {"video_id": video["id"], "filename": video["filename"]}
+            if "folder_id" in video:
+                row["folder_id"] = video["folder_id"]  # with the id, enough to link to the video in the Photos web app
+            if outcome.twin_of is not None:
+                row["twin_of"] = outcome.twin_of
             if outcome.error is not None:
                 log.error("%s %s: %s", video["id"], video["filename"], outcome.error)
-                rows.append({**row, "error": str(outcome.error)})
+                record({**row, "error": str(outcome.error)})
                 continue
             frame_faces, description = outcome.faces, outcome.description
             frame_faces_by_video[video["id"]] = frame_faces
+            sampling_by_video[video["id"]] = outcome.sampling
             if description is not None:
                 descriptions[video["id"]] = description
             matches[video["id"]] = match_video(frame_faces, models, options.min_frames)
-            rows.append({**row, "frames": len(frame_faces), "faces": sum(len(f) for f in frame_faces),
+            record({**row, "frames": len(frame_faces), "faces": sum(len(f) for f in frame_faces),
                          "description": description.summary_en if description else None,
                          "place": description.place if description else None,
                          "matches": [{"person_id": m.person_id, "name": m.name, "best": m.best,
@@ -108,7 +154,8 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
         state.save()  # also keeps what the feedback steps learned
         log.info("%d tag change(s) written", done)
         videos_by_id = {video["id"]: video for video in library.videos}
-        crop_for = lambda video_id, sighting: frame_crop(client, videos_by_id[video_id], options.fps, sighting)  # noqa: E731
+        crop_for = lambda video_id, sighting: frame_crop(  # noqa: E731 - the frame index is only good under the rule that counted it
+            client, videos_by_id[video_id], sampling_by_video[video_id], sighting)
         linked = execute_faces(client, state, face_actions, sightings, crop_for, options.max_writes)
         log.info("%d face change(s) written", linked)
         verify_links(client, state)

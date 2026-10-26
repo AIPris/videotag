@@ -181,3 +181,16 @@ def test_the_credentials_check_reads_the_secret_like_a_scheduled_task_would():
     store_credentials(LOGIN)
     check, credentials = admin._check_credentials()
     assert check.status == "ok" and credentials == LOGIN and "s3cret-pass" not in check.detail
+
+
+def test_the_settings_check_says_what_every_run_will_use_and_fails_for_a_file_that_would_stop_a_run():
+    from videotag import config, settings
+
+    check = admin._check_settings()
+    assert check.status == "ok" and "thorough" in check.detail and "no settings file" in check.detail
+    settings.save(settings.Settings("fast", False))
+    check = admin._check_settings()
+    assert check.status == "ok" and "fast" in check.detail and "descriptions off" in check.detail
+    config.SETTINGS_FILE.write_text('{"apply": true}', encoding="utf-8")
+    check = admin._check_settings()
+    assert check.status == "fail" and "'apply' is a choice for one run" in check.detail

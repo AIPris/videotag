@@ -4,16 +4,26 @@ Nothing here talks to the NAS or writes a file, so the dashboard shows the same 
 started from a terminal, by the scheduled task or from the GUI. Every function returns plain JSON-ready data.
 """
 import json
+import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
-from .config import LOG_FILE, REPORTS_DIR
+from . import facecache
+from .accuracy import ACCURACY_NAME
+from .config import EVIDENCE_DIR, LOG_FILE, REPORTS_DIR
 from .descache import DESCRIBE_DIR
 from .describe import Description
+from .estimates import preset_estimates, reanalysis
+from .evidence import crops
+from .live import LIVE_NAME, Live
+from .live import read as read_live
 from .lock import LOCK_FILE, STALE_AFTER_SECONDS, taken_at
 from .runlog import RunLog, last_run, parse_lines, read_lines, read_tail
+from .sampling import PRESETS
+from .settings import Settings
+from .spotcheck import sample
 from .state import STATE_FILE, State, StateError
 
 DECISIONS = ("auto", "review", "none")  # best first
@@ -29,6 +39,10 @@ class Sources:
     describe_dir: Path = DESCRIBE_DIR
     log_file: Path = LOG_FILE
     lock_file: Path = LOCK_FILE
+    live_file: Path = REPORTS_DIR / LIVE_NAME
+    faces_dir: Path = facecache.FACES_DIR
+    evidence_dir: Path = EVIDENCE_DIR
+    accuracy_file: Path = REPORTS_DIR / ACCURACY_NAME
 
 
 # -- reports -----------------------------------------------------------------------------------
@@ -136,16 +150,30 @@ def _description_status(video_id: int, state: State, description: dict | None) -
 
 def _video(src: Sources, row: dict, state: State, levels: dict) -> dict:
     video_id = row["video_id"]
+    evidence_id = row.get("twin_of") or video_id  # a copy of a file shows the crops of the video that was analysed
+    shown = crops(src.evidence_dir, evidence_id) if row.get("matches") else {}
     people = []
     for match in row.get("matches", []):
         status = _person_status(video_id, match["person_id"], match["decision"], state, levels)
         if status != "none" or match["decision"] != "none":
             people.append({"id": match["person_id"], "name": match["name"], "best": match["best"],
-                           "hits": match["hit_frames"], "decision": match["decision"], "status": status})
+                           "hits": match["hit_frames"], "decision": match["decision"], "status": status,
+                           "crops": shown.get(match["person_id"], [])})
     description = _description(src, video_id)
     return {"id": video_id, "filename": row["filename"], "frames": row.get("frames"), "faces": row.get("faces"),
+            "twin_of": row.get("twin_of"), "folder_id": row.get("folder_id"), "evidence_id": evidence_id,
             "error": row.get("error"), "decision": _video_decision(row), "people": people, "description": description,
             "description_status": _description_status(video_id, state, description)}
+
+
+def _twins(rows: list[dict]) -> list[dict]:
+    """The files that sit in the library under more than one id: the file name and every id, the first one first."""
+    later: dict[int, list[int]] = {}
+    for row in rows:
+        if row.get("twin_of") is not None:
+            later.setdefault(row["twin_of"], []).append(row["video_id"])
+    names = {row["video_id"]: row["filename"] for row in rows}
+    return [{"filename": names.get(first, ""), "ids": [first, *ids]} for first, ids in later.items()]
 
 
 def _people(rows: list[dict], videos: list[dict]) -> list[dict]:
@@ -165,26 +193,45 @@ def _state_counts(state: State) -> dict:
             "descriptions": len(state.descriptions), "descriptions_rejected": len(state.description_rejected)}
 
 
-def library_view(src: Sources) -> dict:
-    """The newest report joined with the state and the description cache: one entry per video."""
+def _live_run(src: Sources, now: datetime) -> Live | None:
+    """The rows the running run has made so far. Nothing when no run holds the lock, when the file is from a run that
+    began earlier (one that died), or when the run has not made a row yet."""
+    lock, taken = _lock(src, now)
+    if not lock["present"] or lock["stale"]:
+        return None
+    found = read_live(src.live_file)
+    return found if found and found.rows and found.started >= taken - RUN_MARKER_GRACE else None
+
+
+def library_view(src: Sources, now: datetime | None = None) -> dict:
+    """The results joined with the state and the description cache: one entry per video. The results are the rows of the
+    run in progress while there are some, else the newest report."""
     state, problem = _load_state(src)
-    latest = _latest_report(src)
-    path, rows = latest if latest else (None, [])
+    live = _live_run(src, now or datetime.now())
+    latest = None if live else _latest_report(src)
+    path, rows = latest if latest else (None, live.rows if live else [])
+    report = ({"name": "current run", "time": live.started.strftime(TIME_FORMAT), "live": True} if live
+              else {"name": path.name, "time": _report_time(path)} if path else None)
     levels = {(tag.item_id, tag.person_id): tag.level for tag in state.written}
     videos = [_video(src, row, state, levels) for row in rows]
-    return {"report": {"name": path.name, "time": _report_time(path)} if path else None, "problem": problem,
+    return {"report": report, "problem": problem,
             "totals": {**_counts(rows), "described": sum(video["description"] is not None for video in videos)},
-            "state": _state_counts(state), "people": _people(rows, videos), "videos": videos}
+            "state": _state_counts(state), "people": _people(rows, videos), "twins": _twins(rows), "videos": videos}
+
+
+def _stamp(path: Path) -> str:
+    """Changes whenever the file does, also when a run appends to it. A missing file has its own stamp."""
+    try:
+        status = path.stat()
+    except FileNotFoundError:
+        return "0"
+    return f"{status.st_mtime_ns}.{status.st_size}"
 
 
 def data_version(src: Sources) -> str:
     """Changes whenever a new report or a new state is saved, so the page knows when to reload the library."""
     latest = next(iter(_report_files(src)), None)
-    try:
-        stamp = src.state_file.stat().st_mtime_ns
-    except FileNotFoundError:
-        stamp = 0
-    return f"{latest.name if latest else '-'}|{stamp}"
+    return f"{latest.name if latest else '-'}|{_stamp(src.state_file)}|{_stamp(src.live_file)}|{_stamp(src.accuracy_file)}"
 
 
 # -- the run that is going on, or the last one --------------------------------------------------
@@ -200,12 +247,21 @@ def _lock(src: Sources, now: datetime) -> tuple[dict, datetime | None]:
             datetime.fromtimestamp(taken_at(src.lock_file) or modified))
 
 
+def _references(run: RunLog) -> dict | None:
+    if run.references is None:
+        return None
+    seconds = run.references_remaining_seconds
+    return {"done": run.references[0], "total": run.references[1],
+            "remaining_seconds": None if seconds is None else round(seconds)}
+
+
 def _run(run: RunLog, now: datetime, live: bool) -> dict:
     elapsed = (run.ended or now) - run.started if run.finished or live else None
     return {"mode": run.mode, "started": run.started.strftime(TIME_FORMAT),
             "ended": run.ended.strftime(TIME_FORMAT) if run.ended else None, "phase": run.phase, "total": run.total,
             "done": run.done, "current": run.current, "errors": run.errors, "planned_tags": run.planned_tags,
-            "written": run.written, "finished": run.finished,
+            "written": run.written, "finished": run.finished, "slice_of": run.slice_of,
+            "references": _references(run),
             "elapsed_seconds": round(elapsed.total_seconds()) if elapsed else None,
             "remaining_seconds": round(run.remaining_seconds) if run.remaining_seconds is not None else None}
 
@@ -222,6 +278,42 @@ def run_status(src: Sources, now: datetime) -> dict:
     else:
         state = "never" if run is None else "idle" if run.finished else "interrupted"
     return {"state": state, "lock": lock, "run": _run(run, now, running) if run else None}
+
+
+def _pace_seconds(src: Sources, now: datetime) -> int | None:
+    """Seconds per video of the last finished run, which is a rough upper bound for redoing a video's frames and faces."""
+    run = run_status(src, now)["run"]
+    if run and run["finished"] and run["done"] and run["elapsed_seconds"]:
+        return round(run["elapsed_seconds"] / run["done"])
+    return None
+
+
+def settings_view(src: Sources, saved: Settings, now: datetime) -> dict:
+    """The saved settings with what the user needs to choose a preset: what each does and what it would save on this
+    library, worked out from the results already saved, and what re-analysing under the chosen preset would touch."""
+    summaries = facecache.summaries(src.faces_dir)
+    return {"preset": saved.preset, "describe": saved.describe,
+            "presets": [{"name": name, "fps": rule.fps, "head_seconds": rule.head_seconds, "tail_fps": rule.tail_fps}
+                        for name, rule in PRESETS.items()],
+            "estimate": preset_estimates(summaries),
+            "reanalyse": {**reanalysis(summaries, PRESETS[saved.preset]), "pace_seconds": _pace_seconds(src, now),
+                          "touched": {name: reanalysis(summaries, rule)["videos"] for name, rule in PRESETS.items()}}}
+
+
+def accuracy_view(src: Sources) -> dict | None:
+    """The accuracy report the latest run wrote, or None when there is none or it cannot be read."""
+    try:
+        report = json.loads(src.accuracy_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def spot_check(src: Sources, count: int, rng: random.Random | None = None) -> list[dict]:
+    """A random sample of each person's matches in the newest report, to look at in Photos."""
+    state, _ = _load_state(src)
+    latest = _latest_report(src)
+    return sample(latest[1] if latest else [], state, count, rng or random.Random())
 
 
 def log_tail(src: Sources, count: int = 80) -> list[dict]:

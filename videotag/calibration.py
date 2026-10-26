@@ -10,6 +10,7 @@ from .faces import FaceEngine
 from .library import fetch
 from .matcher import DEFAULT_MATCH, PersonMatch, PersonModel, face_similarity, match_video
 from .references import ReferenceSet
+from .sampling import Sampling
 from .scanner import frame_faces_of
 from .synology import PhotosClient
 
@@ -76,7 +77,7 @@ def write_slideshow(photos: list[Path], dest: Path) -> None:
 
 
 def video_control(client: PhotosClient, engine: FaceEngine, refs: ReferenceSet, model: PersonModel,
-                  photos_by_id: dict[int, dict], fps: float) -> PersonMatch | None:
+                  photos_by_id: dict[int, dict], sampling: Sampling) -> PersonMatch | None:
     """Run the full video path on a local slideshow of held-out photos of the person (never uploaded)."""
     singles = [i for i, source in enumerate(refs.sources) if source.kind == "single"][:HELD_OUT]
     if len(singles) < HELD_OUT or refs.size < HELD_OUT + 2:
@@ -85,14 +86,14 @@ def video_control(client: PhotosClient, engine: FaceEngine, refs: ReferenceSet, 
     with tempfile.TemporaryDirectory() as tmp:
         video = Path(tmp) / "control.mp4"
         write_slideshow([fetch(client, photos_by_id[refs.sources[i].photo_id]) for i in singles], video)
-        frame_faces = frame_faces_of(engine, video, fps)
+        frame_faces = frame_faces_of(engine, video, sampling)
     held_out_model = PersonModel(model.person_id, model.name, kept, model.threshold)
     return match_video(frame_faces, [held_out_model])[0]
 
 
 def calibrate_person(client: PhotosClient, engine: FaceEngine, refs: ReferenceSet, sets: list[ReferenceSet],
-                     photos_by_id: dict[int, dict], fps: float) -> Calibration:
+                     photos_by_id: dict[int, dict], sampling: Sampling) -> Calibration:
     (model,) = [m for m in person_models(sets) if m.person_id == refs.person_id]
     strangers = stranger_scores(refs, _others(refs, sets))
     return Calibration(refs.name, leave_one_out(refs.embeddings), strangers, model.threshold, model.can_auto,
-                       video_control(client, engine, refs, model, photos_by_id, fps))
+                       video_control(client, engine, refs, model, photos_by_id, sampling))
