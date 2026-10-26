@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480" role="img" aria-labelledby="title description">
+  <title id="title">videotag — Make your videos searchable</title>
+  <desc id="description">Local AI for Synology Photos. An illustrated lakeside video is annotated with a person match and searchable topics. Runs on your PC, with English and German descriptions.</desc>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#92b7ca"/>
+      <stop offset="1" stop-color="#ddc3a4"/>
+    </linearGradient>
+    <linearGradient id="lake" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#537e8e"/>
+      <stop offset="1" stop-color="#244657"/>
+    </linearGradient>
+    <clipPath id="frame"><rect x="722" y="91" width="474" height="282" rx="14"/></clipPath>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#d9e8f5" stroke-opacity=".04"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="480" rx="20" fill="#152536"/>
+  <path d="M674 0H1260Q1280 0 1280 20V460Q1280 480 1260 480H674Z" fill="url(#grid)"/>
+  <path d="M660 0V480" stroke="#2b3c4c"/>
+  <g fill="none" stroke="#a7d2ed" stroke-width="2.2" stroke-linejoin="round">
+    <path d="M58 44H81L94 57 81 70H58Z"/>
+    <path d="m68 51 10 6-10 6Z" fill="#a7d2ed" stroke="none"/>
+  </g>
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="106" y="66" fill="#f4f7fa" font-size="30" font-weight="650" letter-spacing="-.8">videotag</text>
+    <text x="56" y="170" fill="#f4f7fa" font-size="65" font-weight="650" letter-spacing="-2.4">Make your videos</text>
+    <text x="56" y="244" fill="#f4f7fa" font-size="65" font-weight="650" letter-spacing="-2.4">searchable.</text>
+    <text x="59" y="298" fill="#b9cfdf" font-size="26">Local AI for Synology Photos.</text>
+    <path d="M59 337H605" stroke="#3b4e60"/>
+    <text x="59" y="375" fill="#dbe6ed" font-size="19">People, topics, objects, and places.</text>
+    <text x="59" y="409" fill="#9eb5c7" font-size="17">On your PC. In English and German.</text>
+  </g>
+  <g clip-path="url(#frame)">
+    <rect x="722" y="91" width="474" height="282" fill="url(#sky)"/>
+    <circle cx="1085" cy="157" r="38" fill="#ffe0ae"/>
+    <path d="M694 237 822 125 916 230 1012 162 1136 252 1223 203V383H694Z" fill="#59798a"/>
+    <path d="m795 149 27-24 26 29-27-9Z" fill="#dce4df"/>
+    <path d="M706 261 806 219 870 257 934 219 1026 269 1134 221 1210 266V390H706Z" fill="#315568"/>
+    <path d="M706 273Q881 255 1049 276T1210 270V389H706Z" fill="url(#lake)"/>
+    <path d="M1008 293H1151M1044 308H1179M1080 322H1158M981 337H1096M743 296H806M755 311H832" stroke="#a9c3c7" stroke-opacity=".45" stroke-width="2" stroke-linecap="round"/>
+    <path d="M704 354Q823 327 906 355T1216 349V392H704Z" fill="#203b48"/>
+    <ellipse cx="867" cy="249" rx="21" ry="25" fill="#e8b98d"/>
+    <path d="M846 248V235Q850 215 869 221 889 225 888 246L878 235 858 239 852 250Z" fill="#233343"/>
+    <path d="M832 284Q845 269 864 274H874Q897 276 908 306L922 368H813Z" fill="#dba96e"/>
+    <path d="m850 278 18 20 18-21" fill="none" stroke="#b68050" stroke-width="3"/>
+    <path d="M840 304 830 356M893 305 905 356" stroke="#b68050" stroke-width="3"/>
+  </g>
+  <rect x="722" y="91" width="474" height="282" rx="14" fill="none" stroke="#8da8b6" stroke-opacity=".35"/>
+  <g fill="none" stroke="#f8f2df" stroke-width="2.5" stroke-linecap="round">
+    <path d="M832 235V212H853M882 212H903V235M903 259V278H882M853 278H832V259"/>
+  </g>
+  <rect x="825" y="174" width="84" height="30" rx="7" fill="#f4f0df"/>
+  <text x="867" y="194" text-anchor="middle" fill="#243c4b" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" font-weight="600">Alice</text>
+  <rect x="758" y="63" width="396" height="55" rx="12" fill="#f4f7fa"/>
+  <circle cx="785" cy="88" r="8" fill="none" stroke="#526b7c" stroke-width="2"/>
+  <path d="m791 94 6 6" stroke="#526b7c" stroke-width="2" stroke-linecap="round"/>
+  <text x="815" y="98" fill="#314d61" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20">Alice at the lake</text>
+  <rect x="750" y="346" width="411" height="49" rx="11" fill="#233c50" stroke="#4d687c"/>
+  <path d="m772 362 12 8-12 8Z" fill="#a7d2ed"/>
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" fill="#e2ecf1">
+    <text x="803" y="376">Alice</text>
+    <path d="M857 359V382M984 359V382" stroke="#4d687c"/>
+    <text x="878" y="376">lake / See</text>
+    <text x="1005" y="376">outdoors</text>
+  </g>
+  <text x="960" y="430" text-anchor="middle" fill="#9eb5c7" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14">Illustration with sample tags</text>
+</svg>

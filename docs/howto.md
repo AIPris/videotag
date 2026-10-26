@@ -30,7 +30,7 @@
 ## Install
 
 ```
-git clone <repository-url> videotag
+git clone https://github.com/AIPris/videotag.git
 cd videotag
 
 # 1. A CUDA build of PyTorch (skip this if you will always run with --no-describe)

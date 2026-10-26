@@ -1,81 +1,193 @@
-# videotag
+<p align="center">
+  <img src="docs/assets/videotag-banner.svg" alt="videotag — Make your videos searchable. Local AI for Synology Photos." width="1280">
+</p>
 
-Makes the **videos** in a Synology Photos library searchable, unattended, by
+# videotag · Local AI video tagging for Synology Photos
 
-- **who is in them**: tags, the person's People page and one album that collects the suggestions to check,
-- **what they show**: a bilingual (English and German) description with topics and objects, and a place when a landmark or readable sign shows one.
+**Find the people and moments in your videos, right inside Synology Photos.**
 
-Synology Photos recognises faces in photos only. `videotag` reuses what Photos already knows (the people you named and their photos), matches video frames against those faces on your own PC, and writes the results back through the normal Photos features, so you search, browse and correct everything inside Photos. Nothing leaves your network except the one-time model downloads.
+videotag adds **video face recognition, automatic tagging, and AI video descriptions** to your Synology Photos library. It runs on your Windows PC, matches video frames against the people you have already named in Photos, and makes videos searchable by **people, topics, objects, and visible places**.
 
-![Overview](docs/diagrams/system-overview/system-overview.png)
+<p>
+  <a href="https://github.com/AIPris/videotag/actions/workflows/tests.yml"><img src="https://github.com/AIPris/videotag/actions/workflows/tests.yml/badge.svg?branch=main" alt="Tests on main"></a>
+  <a href="#requirements"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.11 or newer"></a>
+  <a href="#requirements"><img src="https://img.shields.io/badge/Windows-10%20%2F%2011-2674C4?style=flat-square" alt="Windows 10 or 11"></a>
+  <a href="#privacy-and-control"><img src="https://img.shields.io/badge/AI-runs%20locally-38766B?style=flat-square" alt="AI runs locally"></a>
+  <a href="#project-status"><img src="https://img.shields.io/badge/Status-proof%20of%20concept-99652B?style=flat-square" alt="Status: proof of concept"></a>
+</p>
 
-## What you get in Photos
+[**Get started**](#quick-start) · [Dashboard](#dashboard) · [User guide](docs/howto.md) · [How it works](#how-it-works) · [FAQ](#faq) · [Roadmap](docs/roadmap.md)
 
-| Where | What appears |
+## Your library, easier to find
+
+| Find… | What videotag adds to Synology Photos |
 |---|---|
-| Search box | A person's name finds their photos **and** their videos; so do topics and objects in either language (`Katze`, `cat`, `scuba`, `Weihnachtsbaum`). |
-| People page of a person | Their photos plus every video they were matched in. |
-| Tags | `Name` for confident matches, `Name?` for suggestions you can confirm. |
-| Album `videotag: to check` | Every video that carries a `Name?` suggestion. It empties as you confirm or reject them. |
-| A video's description | A marked block `[vt] ... [/vt]` after your own text, in English and German. |
+| **The people in a video** | Face matching against your named people. Confident matches get a name tag and appear on that person's People page. |
+| **The moment you remember** | Searchable descriptions, topics, and objects in **English and German**: try `cat`, `Katze`, `scuba`, or `Weihnachtsbaum`. |
+| **A place shown on screen** | Place names when a landmark or readable sign supplies evidence. No invented GPS coordinates. |
+| **Matches worth checking** | A `Name?` tag marks a suggestion, collected in the shared `videotag: to check` album. Confirm or reject it in Photos. |
 
-You correct results **in Photos**: remove a tag, remove a person from a video, delete or edit the description block, add the tag yourself. The tool learns from that and never fights you. See [the how-to](docs/howto.md#correcting-results).
+Your existing descriptions stay in place. Generated text lives in a separate `[vt] ... [/vt]` block, and videotag respects the corrections you make in Photos.
+
+## Dashboard
+
+See results as a run progresses, browse matches and descriptions, inspect the face crops behind a match, draw a spot-check sample, and check the log from a local browser dashboard.
+
+![videotag dashboard showing sample video matches, person tags, and bilingual AI descriptions](docs/assets/dashboard.png)
+
+<sub>The actual dashboard with fictional sample data. Names, filenames, and results are illustrative.</sub>
+
+```powershell
+videotag gui
+```
+
+Opens at `http://127.0.0.1:8765/`. The dashboard can start dry runs and apply runs, show scheduled runs, and switch Synology accounts. Settings controls the sampling preset and descriptions; dry runs can cover a limited number of videos, unanalysed videos, or one album. **Undo** removes the tool's tracked changes after confirmation. The command line also works on its own for unattended processing.
+
+[Dashboard guide](docs/howto.md#dashboard-optional) · [Schedule a daily run](docs/howto.md#run-it-every-day)
+
+## Requirements
+
+| Component | What you need |
+|---|---|
+| Synology NAS | **Synology Photos on DSM 7**, a personal space, and people named in the People view |
+| Computer | **Windows 10/11**; developed and tested on Windows 11 |
+| Python | **3.11 or newer**; tested with Python 3.13 |
+| Video tools | **ffmpeg** on `PATH`; `ffmpeg -version` should work |
+| GPU for descriptions | NVIDIA GPU with about **10 GB of free VRAM**; face matching alone runs on the CPU |
+| Storage | About **15 GB** for the description setup, plus caches that grow with your library |
+
+Use a dedicated, non-admin Photos account with access to the personal space you want to process. Give each named person at least three reference photos for confident matching. [Full prerequisites](docs/howto.md#what-you-need)
 
 ## Quick start
 
-Needs Windows, Python 3.11+, `ffmpeg` on PATH, Synology Photos (DSM 7) and, for the descriptions, an NVIDIA GPU with about 10 GB free memory.
+### 1. Install
 
-```
-pip install torch --index-url https://download.pytorch.org/whl/cu128   # CUDA build; skip with --no-describe
-pip install --no-user -e ".[describe]"
-videotag credentials set      # asks for the NAS address, account and password; stored in Windows Credential Manager
-videotag doctor               # checks everything an unattended run needs
-videotag run                  # DRY RUN: reads Photos, writes nothing, logs what it would do
-videotag run --apply --max-writes 5     # first small write; check the result in Photos, then --max-writes all writes everything
-```
+Run these commands in PowerShell with the Python interpreter you intend to use for videotag:
 
-Full instructions, scheduling a daily run, correcting results, backups and troubleshooting: **[docs/howto.md](docs/howto.md)**.
+```powershell
+git clone https://github.com/AIPris/videotag.git
+cd videotag
 
-## Dashboard (optional)
-
-Everything above works headless, and the dashboard is never needed for it. If you want to see what is going on:
-
-```
-videotag gui        # opens http://127.0.0.1:8765/ in your browser (Ctrl+C in the terminal stops it)
+# CUDA-enabled PyTorch for local video descriptions
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+python -m pip install --no-user -e ".[describe]"
 ```
 
-It shows the run in progress (reading the reference photos, then videos done and time left) with the results of that run as they are made, the latest results per video and person with the scores and the face crops behind each decision, what has been written to Photos and what you corrected, how far the matching can be trusted, a random spot-check of the matches, the history of runs, the live log and a health check. Its Settings dialog holds the frame-rate preset every run uses. It watches the same data folder and log as a scheduled run, so it shows those too, it can start a dry run or (after a confirmation) an apply run, and it can change the Synology account (each account keeps its own saved data, see [switching accounts](docs/howto.md#switching-accounts)). Standard library only, nothing loaded from the internet, reachable from this PC only. Details: [docs/howto.md](docs/howto.md#dashboard-optional).
+<details>
+<summary><strong>No NVIDIA GPU? Install for people tagging only.</strong></summary>
 
-## Safe by design
+Skip PyTorch and the description dependencies:
 
-- **Dry run is the default.** Nothing is written without `--apply`, and `--max-writes` caps each kind of write per run (100 unless you say `N` or `all`).
-- **Fully reversible:** `videotag undo` (or **Undo** in the dashboard) removes every tag, face link, description block and album the tool created, and nothing else. Your own tags, notes and edits are never touched.
-- **Credentials** live in the OS credential store (or environment variables / secret files), never in the repository, a log or a report. HTTPS only, certificates always verified. See [docs/security.md](docs/security.md).
-- **Local only:** faces and frames are processed on your PC. The description model runs locally on your GPU.
+```powershell
+git clone https://github.com/AIPris/videotag.git
+cd videotag
+python -m pip install --no-user -e "."
+```
+
+Use `videotag run --no-describe` for the dry run and `videotag run --no-describe --apply --max-writes 5` for the first write. In the dashboard, uncheck **Describe videos**. The `doctor` warning about missing `torch/transformers` is expected with this setup. If those libraries are already installed without a CUDA GPU, the descriptions check reports a failure; people tagging still works with `--no-describe`. Resolve failures in the other checks before running.
+
+</details>
+
+### 2. Connect and check
+
+```powershell
+videotag credentials set
+videotag doctor
+```
+
+Enter your NAS HTTPS address, account, and password when prompted. Credentials are stored in Windows Credential Manager. Before running, name the people in Synology Photos so videotag has reference faces to match.
+
+### 3. Preview, then apply
+
+```powershell
+# Analyse the library and preview changes; writes nothing to Photos
+videotag run
+
+# After reviewing the dry run, try a small batch of writes
+videotag run --apply --max-writes 5
+```
+
+**Dry run is the default.** The write limit applies to each kind of change, including tags, person links, descriptions, and album items. The first run downloads the models and analyses your library, so allow extra time; later runs reuse cached results.
+
+Check the results in Photos before increasing the limit; `--max-writes all` removes the cap. See the [first-run guide](docs/howto.md#first-run-a-dry-run) for details and the [troubleshooting guide](docs/howto.md#troubleshooting) if a check fails.
+
+## How it works
+
+1. **Learn the named faces.** Read the people and reference photos already in Synology Photos.
+2. **Analyse videos locally.** Sample frames, match faces with OpenCV, and optionally generate descriptions with the local Qwen3-VL-4B model.
+3. **Write back to Photos.** Apply tags, People-page links, description blocks, and album updates through the Photos web API.
+4. **Respect your corrections.** Read your changes on the next run and remember rejected matches and edited descriptions.
+
+<details>
+<summary><strong>See the system overview</strong></summary>
+
+![System overview of videotag, local AI processing, and Synology Photos](docs/diagrams/system-overview/system-overview.png)
+
+Read the [architecture guide](docs/architecture.md) for the modules, data flow, caching, and feedback rules.
+
+</details>
+
+## Privacy and control
+
+- **Local AI processing.** Faces, frames, and descriptions are processed on your PC. No cloud AI service or telemetry. Setup downloads Python packages and model files; library traffic goes to your NAS.
+- **Preview before writing.** Nothing is written to Photos without `--apply`. Use `--max-writes` to keep the first batch small.
+- **Your edits take priority.** Remove a match, confirm a suggestion, or edit a generated description in Photos. videotag remembers your choices.
+- **Undo the tool's changes.** `videotag undo`, or **Undo** in the dashboard, removes the tags, links, description blocks, and albums it tracks, while preserving your own content and edited descriptions. See [maintenance](docs/howto.md#maintenance).
+- **Protected credentials.** OS credential storage, HTTPS, and certificate verification. Cached photos and face embeddings stay in the local data folder and should be protected like the original media.
+
+[Security and data storage](docs/security.md) · [Correcting results](docs/howto.md#correcting-results)
+
+## FAQ
+
+### Does videotag run on the Synology NAS?
+
+It runs on your Windows PC and connects to Synology Photos over HTTPS. It is a Python tool with an optional local dashboard, not a DSM package. The NAS remains the home of your library.
+
+### Do I need a GPU for face recognition?
+
+No. People tagging runs on the CPU. The NVIDIA GPU is needed for AI video descriptions; pass `--no-describe` to skip those.
+
+### Can I search in German?
+
+Yes. Generated descriptions, topics, and objects include English and German, so both `cat` and `Katze` can help you find the same video. The model can make mistakes, including awkward German wording.
+
+### Will it modify my original video files?
+
+videotag writes Photos metadata through the web API. It downloads videos temporarily for analysis and does not re-encode or replace the originals on your NAS.
+
+### Is this an official Synology project?
+
+No. videotag is an independent project and is not affiliated with or endorsed by Synology. Some face-link APIs are undocumented and may change with Photos updates.
 
 ## Documentation
 
-| | |
+| Guide | Start here when you want to… |
 |---|---|
-| [docs/howto.md](docs/howto.md) | Install, first run, scheduling, correcting results, maintenance, troubleshooting |
-| [docs/architecture.md](docs/architecture.md) | How a run works, the modules, the files it keeps, the rules behind the feedback loop (with diagrams) |
-| [docs/security.md](docs/security.md) | Credential storage, what data is kept where, what leaves the machine |
-| [docs/synology-photos-api.md](docs/synology-photos-api.md) | The Photos web API calls used, including the undocumented ones, and their quirks |
+| [User guide](docs/howto.md) | Install, connect, schedule runs, correct results, or troubleshoot |
+| [Architecture](docs/architecture.md) | Understand the processing pipeline and feedback loop |
+| [Security](docs/security.md) | Review credentials, caches, biometric data, and network traffic |
+| [Synology Photos API notes](docs/synology-photos-api.md) | See the endpoints used and their known quirks |
+| [Roadmap](docs/roadmap.md) | Follow planned improvements and evaluation work |
 
-## Status and limits
+## Project status
 
-Version 0.1, proof of concept proven on one NAS (DS224+, DSM 7.4.1). A first dry run over a real library of 1,553 videos and 29,531 photos took about 12 hours; the speed presets, the saved reference faces and the download-while-describing pipeline are what bring that down (see [the roadmap](docs/roadmap.md)).
+**Version 0.1 · Proof of concept.** Verified on one DS224+ running DSM 7.4.1, with Windows 11 and Python 3.13. Start with a dry run and review the results on your own library.
 
-- Match and description quality has not been audited against a large library. The description model is small (4B parameters) and can over-reach; the German has some awkward words.
-- Places are written only when a named landmark or readable text shows one. The Photos map stays empty: it needs GPS, and the tool never invents coordinates.
-- The face-link calls are not documented by Synology. They come from captures of the Photos web UI by the [synopticon](https://github.com/fdebijl/synopticon) project and were verified on this NAS. A Photos update could change them.
-- Tested on Windows 11 and Python 3.13. The scheduled task has not been registered on the reference machine yet; the how-to says how to test one.
-- No license has been chosen yet.
+Face matching and description quality have not been audited against a large library. The 4B description model can over-interpret scenes. Places require visible evidence; the Photos map needs GPS data that videotag does not invent. Scheduling instructions are provided, but a scheduled task has not yet been validated on the reference machine.
 
-## Development
+The face-link integration builds on API research by [synopticon](https://github.com/fdebijl/synopticon). A Synology Photos update may require adjustments.
 
-```
-pip install -e ".[dev]"
-python -m pytest        # unit tests: no NAS, no GPU, never touches the real credential store
+**License:** no license has been chosen yet.
+
+## Development and feedback
+
+Found a bug or have an idea? [Open an issue](https://github.com/AIPris/videotag/issues) with the steps to reproduce it and your Python, DSM, and Photos versions. Remove credentials, private hostnames, personal filenames, and names from logs before sharing them. For security concerns, follow the [security reporting guidance](docs/security.md#reporting-a-problem).
+
+```powershell
+python -m pip install --no-user -e ".[dev]"
+python -m pytest
 ruff check .
+node --test tests/gui_app.test.cjs
 ```
+
+The tests use no NAS, no GPU, and no real credential store. Dashboard regression tests use Node.js 22+ and its built-in test runner, with no npm dependencies. [View the test workflow](https://github.com/AIPris/videotag/actions/workflows/tests.yml).

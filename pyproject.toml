@@ -5,9 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "videotag"
 dynamic = ["version"]
-description = "Make videos in Synology Photos searchable by people, topics, objects and places."
+description = "Local AI video tagging and face recognition for Synology Photos, with English and German descriptions."
 readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["synology", "synology-photos", "video-tagging", "face-recognition", "local-ai", "video-search", "video-captioning"]
 dependencies = [
     "numpy",
     "opencv-python",
@@ -19,6 +20,13 @@ dependencies = [
 # The bilingual descriptions. Install a CUDA build of torch first (https://pytorch.org), then `pip install ".[describe]"`.
 describe = ["torch", "transformers", "accelerate", "pyyaml", "pillow"]
 dev = ["pytest", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/AIPris/videotag"
+Documentation = "https://github.com/AIPris/videotag/blob/main/docs/howto.md"
+Repository = "https://github.com/AIPris/videotag"
+Issues = "https://github.com/AIPris/videotag/issues"
+Roadmap = "https://github.com/AIPris/videotag/blob/main/docs/roadmap.md"
 
 [project.scripts]
 videotag = "videotag.cli:main"
