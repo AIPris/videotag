@@ -35,12 +35,13 @@ class Gui:
                            lock_file=tmp_path / "run.lock", faces_dir=tmp_path / "faces",
                            evidence_dir=tmp_path / "evidence", accuracy_file=tmp_path / "accuracy.json")
         self.launched, self.checked, self.launch_error = [], [], None
+        self.undone, self.undo_error = [], None
         self.albums, self.albums_error = [{"id": 5, "name": "Holiday"}, {"id": 6, "name": "Pets"}], None
         self.layout = Layout(state=tmp_path / "d-state", reports=tmp_path / "d-reports", cache=tmp_path / "d-cache",
                              logs=tmp_path / "d-logs", parked=tmp_path / "d-accounts")
         self.verified, self.verify_error = [], None
         self.server = make_server(self.src, 0, assets=assets, doctor=self._doctor, launch=self._launch,
-                                  verify=self._verify, layout=self.layout, albums=self._albums)
+                                  undo=self._undo, verify=self._verify, layout=self.layout, albums=self._albums)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
 
@@ -57,6 +58,11 @@ class Gui:
         if self.verify_error:
             raise self.verify_error
         self.verified.append(Identity.of(credentials))
+
+    def _undo(self, src, now):
+        if self.undo_error:
+            raise self.undo_error
+        self.undone.append(1)
 
     def _launch(self, src, now, **options):
         if self.launch_error:
@@ -489,3 +495,55 @@ def test_the_page_shows_no_link_for_data_that_belongs_to_another_account():
     start = script.index("function photosLink")
     body = script[start: script.index("\n}\n", start)]
     assert "account.mismatch" in body and "account.owner" in body and "folder_id" in body
+
+
+def test_the_run_dialog_asks_for_the_write_cap_only_when_applying_and_never_lets_a_blank_one_through():
+    """A blank cap became 0 in the command and at the server, and a bad one in the hidden field blocked a dry run."""
+    index = (ASSETS_DIR / "index.html").read_text(encoding="utf-8")
+    script = (ASSETS_DIR / "app.js").read_text(encoding="utf-8")
+    field = re.search(r'<input[^>]*id="run-cap"[^>]*>', index).group(0)
+    assert "required" in field and 'step="1"' in field
+    assert "if (apply) options.max_writes = " in script  # a dry run does not depend on the field it cannot show
+    assert '$("run-cap").disabled = !o.apply' in script  # a hidden field must not block the submit
+
+
+def test_the_run_dialog_can_write_without_a_limit_and_asks_for_that_afresh_each_time_it_opens():
+    index = (ASSETS_DIR / "index.html").read_text(encoding="utf-8")
+    script = (ASSETS_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="run-all"' in index and 'id="run-all-row"' in index
+    assert '$("run-all").checked ? "all"' in script  # what the server and `videotag run --max-writes` both understand
+    assert '$("run-cap").disabled = !o.apply || $("run-all").checked' in script  # no number to type, none to be refused
+    assert '$("run-all").checked = false;' in script  # opening the dialog: everything is chosen on purpose, not left over
+
+
+# -- undo ----------------------------------------------------------------------------------------------------
+
+def test_undo_is_started_from_the_page(gui):
+    status, _, payload = gui.request("POST", "/api/undo")
+    assert status == 202 and json.loads(payload) == {"started": True} and gui.undone == [1]
+
+
+def test_undo_needs_the_session_token_and_the_own_origin_like_every_post(gui):
+    assert gui.request("POST", "/api/undo", token=False)[0] == 403
+    assert gui.request("POST", "/api/undo", token="something else")[0] == 403
+    assert gui.request("POST", "/api/undo", origin="http://evil.example")[0] == 403
+    assert gui.undone == []
+
+
+def test_undo_while_a_run_is_going_is_a_conflict_and_removes_nothing(gui):
+    gui.undo_error = AlreadyRunning("a run is already in progress")
+    status, _, payload = gui.request("POST", "/api/undo")
+    assert status == 409 and json.loads(payload)["error"] == "a run is already in progress" and gui.undone == []
+
+
+def test_the_page_has_an_undo_button_that_asks_first_and_the_run_dialog_no_longer_says_undo_needs_a_terminal():
+    index = (ASSETS_DIR / "index.html").read_text(encoding="utf-8")
+    script = (ASSETS_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="undo-open"' in index and 'id="undo-dialog"' in index and 'id="undo-start"' in index
+    click = script.index('$("undo-open").addEventListener("click"')
+    submit = script.index('$("undo-form").addEventListener("submit"')
+    assert click < submit and "dialog.showModal()" in script[click:submit]  # the button only opens the question ...
+    assert script.count('"/api/undo"') == 1 and script.index('"/api/undo"') > submit  # ... and only its answer posts
+    assert "only possible from a terminal" not in index
+    dialog = re.search(r'<dialog id="undo-dialog".*?</dialog>', index, re.DOTALL).group(0)
+    assert re.search(r'<button[^>]*id="undo-cancel"[^>]*autofocus', dialog)  # Enter must not remove everything

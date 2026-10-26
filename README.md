@@ -2,7 +2,7 @@
 
 Makes the **videos** in a Synology Photos library searchable, unattended, by
 
-- **who is in them**: tags, the person's People page and a per-person album,
+- **who is in them**: tags, the person's People page and one album that collects the suggestions to check,
 - **what they show**: a bilingual (English and German) description with topics and objects, and a place when a landmark or readable sign shows one.
 
 Synology Photos recognises faces in photos only. `videotag` reuses what Photos already knows (the people you named and their photos), matches video frames against those faces on your own PC, and writes the results back through the normal Photos features, so you search, browse and correct everything inside Photos. Nothing leaves your network except the one-time model downloads.
@@ -16,7 +16,7 @@ Synology Photos recognises faces in photos only. `videotag` reuses what Photos a
 | Search box | A person's name finds their photos **and** their videos; so do topics and objects in either language (`Katze`, `cat`, `scuba`, `Weihnachtsbaum`). |
 | People page of a person | Their photos plus every video they were matched in. |
 | Tags | `Name` for confident matches, `Name?` for suggestions you can confirm. |
-| Albums | One album per person: their photos plus their matched videos. |
+| Album `videotag: to check` | Every video that carries a `Name?` suggestion. It empties as you confirm or reject them. |
 | A video's description | A marked block `[vt] ... [/vt]` after your own text, in English and German. |
 
 You correct results **in Photos**: remove a tag, remove a person from a video, delete or edit the description block, add the tag yourself. The tool learns from that and never fights you. See [the how-to](docs/howto.md#correcting-results).
@@ -31,7 +31,7 @@ pip install --no-user -e ".[describe]"
 videotag credentials set      # asks for the NAS address, account and password; stored in Windows Credential Manager
 videotag doctor               # checks everything an unattended run needs
 videotag run                  # DRY RUN: reads Photos, writes nothing, logs what it would do
-videotag run --apply --max-writes 5     # first small write; check the result in Photos, then run without the limit
+videotag run --apply --max-writes 5     # first small write; check the result in Photos, then --max-writes all writes everything
 ```
 
 Full instructions, scheduling a daily run, correcting results, backups and troubleshooting: **[docs/howto.md](docs/howto.md)**.
@@ -48,8 +48,8 @@ It shows the run in progress (reading the reference photos, then videos done and
 
 ## Safe by design
 
-- **Dry run is the default.** Nothing is written without `--apply`, and `--max-writes` caps each kind of write per run.
-- **Fully reversible:** `videotag undo` removes every tag, face link, description block and album the tool created, and nothing else. Your own tags, notes and edits are never touched.
+- **Dry run is the default.** Nothing is written without `--apply`, and `--max-writes` caps each kind of write per run (100 unless you say `N` or `all`).
+- **Fully reversible:** `videotag undo` (or **Undo** in the dashboard) removes every tag, face link, description block and album the tool created, and nothing else. Your own tags, notes and edits are never touched.
 - **Credentials** live in the OS credential store (or environment variables / secret files), never in the repository, a log or a report. HTTPS only, certificates always verified. See [docs/security.md](docs/security.md).
 - **Local only:** faces and frames are processed on your PC. The description model runs locally on your GPU.
 

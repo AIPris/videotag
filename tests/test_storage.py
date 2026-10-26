@@ -12,12 +12,12 @@ from videotag.state import State, StateError, WrittenTag
 
 def test_state_survives_a_restart(tmp_path):
     path = tmp_path / "state.json"
-    state = State(path, [WrittenTag(1, 2, 3, "Alice?", "review", "2026-01-01")], {(4, 2)}, {(5, 2)}, {2: 77}, {(8, 2): 900},
+    state = State(path, [WrittenTag(1, 2, 3, "Alice?", "review", "2026-01-01")], {(4, 2)}, {(5, 2)}, 77, {(8, 2): 900},
                   {9: "[videotag]\nEN: x\n[/videotag]"}, {10})
     state.save()
     loaded = State.load(path)
     assert loaded.written == state.written and loaded.rejected == {(4, 2)} and loaded.confirmed == {(5, 2)}
-    assert loaded.albums == {2: 77} and loaded.faces == {(8, 2): 900}
+    assert loaded.review_album == 77 and loaded.faces == {(8, 2): 900}
     assert loaded.descriptions == {9: "[videotag]\nEN: x\n[/videotag]"} and loaded.description_rejected == {10}
 
 
@@ -25,7 +25,17 @@ def test_a_state_file_from_before_albums_and_faces_existed_still_loads(tmp_path)
     path = tmp_path / "state.json"
     path.write_text('{"written": [], "rejected": [], "confirmed": []}', encoding="utf-8")
     loaded = State.load(path)
-    assert loaded.albums == {} and loaded.faces == {} and loaded.descriptions == {} and loaded.description_rejected == set()
+    assert loaded.review_album is None and loaded.faces == {} and loaded.descriptions == {}
+    assert loaded.description_rejected == set()
+
+
+def test_the_albums_of_the_one_album_per_person_era_are_forgotten(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text('{"written": [], "rejected": [], "confirmed": [], "albums": {"2": 77, "3": 78}}', encoding="utf-8")
+    loaded = State.load(path)
+    assert loaded.review_album is None
+    loaded.save()
+    assert "albums" not in path.read_text(encoding="utf-8")
 
 
 def test_description_cache_round_trip_including_an_unusable_answer(tmp_path, monkeypatch):

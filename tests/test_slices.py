@@ -65,6 +65,6 @@ class AlbumClient:
         return [{"id": 5, "name": "Holiday"}, {"id": 900, "name": "Alice"}, {"id": 6, "name": "Pets"}]
 
 
-def test_your_own_albums_exclude_the_ones_this_tool_created_for_each_person():
-    state = State(albums={7: 900})
+def test_your_own_albums_exclude_the_one_this_tool_created():
+    state = State(review_album=900)
     assert [album["name"] for album in own_albums(AlbumClient(), state)] == ["Holiday", "Pets"]

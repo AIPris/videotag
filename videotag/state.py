@@ -28,7 +28,7 @@ class State:
     written: list[WrittenTag] = field(default_factory=list)       # tags this tool added and that are still there
     rejected: set[tuple[int, int]] = field(default_factory=set)   # (video, person): the user removed our tag
     confirmed: set[tuple[int, int]] = field(default_factory=set)  # (video, person): the user tagged it themselves
-    albums: dict[int, int] = field(default_factory=dict)          # person id -> id of the album this tool created
+    review_album: int | None = None                               # id of the "to check" album this tool created
     faces: dict[tuple[int, int], int] = field(default_factory=dict)  # (video, person) -> id of the face record this tool created
     descriptions: dict[int, str] = field(default_factory=dict)    # video -> the description block this tool wrote
     description_rejected: set[int] = field(default_factory=set)   # videos whose block the user deleted
@@ -42,7 +42,7 @@ class State:
             raw = json.loads(path.read_text(encoding="utf-8-sig"))  # editors on Windows may add a BOM
             return cls(path, [WrittenTag(**row) for row in raw["written"]],
                        {tuple(pair) for pair in raw["rejected"]}, {tuple(pair) for pair in raw["confirmed"]},
-                       {int(person): album for person, album in raw.get("albums", {}).items()},
+                       raw.get("review_album"),  # the per-person "albums" of older files are not read: the user's to clean up
                        {(row["item_id"], row["person_id"]): row["face_id"] for row in raw.get("faces", [])},
                        {int(video): block for video, block in raw.get("descriptions", {}).items()},
                        set(raw.get("description_rejected", [])))
@@ -55,7 +55,7 @@ class State:
             "written": [asdict(tag) for tag in self.written],
             "rejected": sorted(self.rejected),
             "confirmed": sorted(self.confirmed),
-            "albums": {str(person): album for person, album in self.albums.items()},
+            "review_album": self.review_album,
             "faces": [{"item_id": item, "person_id": person, "face_id": face}
                       for (item, person), face in sorted(self.faces.items())],
             "descriptions": {str(video): block for video, block in sorted(self.descriptions.items())},

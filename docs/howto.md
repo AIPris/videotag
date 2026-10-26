@@ -112,13 +112,13 @@ Start small, look at the result in Photos, then let it run fully:
 videotag run --apply --max-writes 5
 ```
 
-`--max-writes` caps each kind of write (tags, face links, descriptions, album items) per run. Open a few of the videos in Photos and check the tags, the People page and the description. Then:
+`--max-writes` caps each kind of write (tags, face links, descriptions, album items) per run; without it a run writes at most 100 of each, and what is left waits for the next run. Open a few of the videos in Photos and check the tags, the People page and the description. Then write everything in one run (in the dashboard: tick **No limit** in the run dialog):
 
 ```
-videotag run --apply
+videotag run --apply --max-writes all
 ```
 
-If you do not like what happened, `videotag undo` removes everything the tool created (and only that).
+If you do not like what happened, `videotag undo` (or **Undo** in the dashboard) removes everything the tool created (and only that).
 
 ## Correcting results
 
@@ -128,9 +128,9 @@ You correct everything **in Photos**. The tool reads your edits on the next run 
 
 | You want to | Do this in Photos | What the tool does |
 |---|---|---|
-| Reject a person on a video | Remove the tag `Name` from the video, **or** remove the person from the video in the People view | Remembers the rejection, takes its own tag, album entry and face link back, never adds them again |
-| Reject a suggestion | Remove the tag `Name?` | Never suggests that person for that video again |
-| Confirm a suggestion | Add the tag `Name` to the video (keep or remove `Name?`) | Treats the video as confirmed, links it on the People page, adds it to the person's album, removes its own `Name?` |
+| Reject a person on a video | Remove the tag `Name` from the video, **or** remove the person from the video in the People view | Remembers the rejection, takes its own tag and face link back, never adds them again |
+| Reject a suggestion | Remove the tag `Name?` | Never suggests that person for that video again; the video leaves the album `videotag: to check` unless another suggestion is still on it |
+| Confirm a suggestion | Add the tag `Name` to the video (keep or remove `Name?`) | Treats the video as confirmed, links it on the People page, removes its own `Name?`; the video leaves the album `videotag: to check` unless another suggestion is still on it |
 | Add someone it missed | Add the tag `Name` | Same as confirming |
 | Remove the generated description | Delete the `[vt] ... [/vt]` block (keep your own text) | Never writes a description for that video again |
 | Keep your own wording | Edit inside the block | The block is yours now: left alone, even by `undo` |
@@ -139,6 +139,10 @@ You correct everything **in Photos**. The tool reads your edits on the next run 
 | Fix a wrong reference face | Correct it in Photos' People view | Picked up on the next run |
 
 Searching `Name` also finds videos tagged `Name?` (Photos search matches any part of a tag); searching `Name?` lists only the suggestions.
+
+The album `videotag: to check` is the inbox for the suggestions: work through it by confirming or rejecting each video by tag, and it empties itself on the next run. Edit tags, not the album: a video you take out by hand comes back while its suggestion stands.
+
+Versions before this one also made one album per person (named like the person). videotag no longer touches those and does not know about them any more, so `undo` leaves them: delete them in Photos yourself.
 
 ## Run it every day
 
@@ -191,7 +195,7 @@ Opens a local web page. It needs nothing beyond the normal install, and no run n
 
 **Settings** (header) holds the preset every run uses, with what each would save on your library, whether videos are described, and the Re-analyse button. See [speed](#speed-presets-and-settings).
 
-**Start a run** opens a dialog. A *dry run* reads Photos and writes nothing, and can be limited to a slice of the library (a number of videos, only those not analysed yet, or one of your albums; *Load my albums* asks your NAS). *Apply* writes, shows the write cap and the equivalent terminal command, and needs a click on "Apply changes"; it always covers the whole library. The dashboard starts the real `videotag run` as a separate process, so it takes the same run lock as any run: it cannot overlap a scheduled one, and it keeps going if you close the dashboard. **`undo` is deliberately only available from the terminal.**
+**Start a run** opens a dialog. A *dry run* reads Photos and writes nothing, and can be limited to a slice of the library (a number of videos, only those not analysed yet, or one of your albums; *Load my albums* asks your NAS). *Apply* writes, shows the write cap and the equivalent terminal command, and needs a click on "Apply changes"; it always covers the whole library. The dashboard starts the real `videotag run` as a separate process, so it takes the same run lock as any run: it cannot overlap a scheduled one, and it keeps going if you close the dashboard. **Undo…** (in the header) asks "Remove everything videotag wrote?" first, with Cancel as the default, and then starts the real `videotag undo` the same way: as its own process with the same run lock, so it cannot overlap a run, and its progress and result (what it removed, by kind) show at the top and in the log.
 
 **Account** (the button in the header) shows which Synology account videotag uses and lets you change it: a new password, or another account or NAS. It checks the login against the NAS first and only then stores it, in the same Windows Credential Manager entry as `videotag credentials set`, so both ways behave identically. See [switching accounts](#switching-accounts).
 
@@ -215,7 +219,7 @@ Everything videotag remembers (the state file, the caches, the reports and the l
 - Switching waits while a run is in progress. If a folder cannot be moved (Explorer or a virus scanner holds a file in it) everything is put back and you are told to close the program.
 - A login from the `VIDEOTAG_*` environment variables takes priority over a stored one, so the dashboard shows it but cannot change it.
 
-**Tags, face links, descriptions and albums that videotag wrote stay in Photos** when you switch away. To remove them, run `videotag undo` while that account is still active, before switching.
+**Tags, face links, descriptions and albums that videotag wrote stay in Photos** when you switch away. To remove them, use **Undo** (or run `videotag undo`) while that account is still active, before switching.
 
 ## Speed: presets and settings
 
@@ -241,7 +245,7 @@ To see what the tool would do without waiting for the whole library, a **dry run
 videotag run --limit 20                 # the first 20 videos
 videotag run --limit 20 --new-only      # the first 20 that have no saved result yet: run it again for the next 20
 videotag albums                         # lists your own albums with their numbers
-videotag run --album 12 --limit 50      # only videos of one of your albums (not the per-person albums videotag makes)
+videotag run --album 12 --limit 50      # only videos of one of your albums (not the album `videotag: to check` that videotag makes)
 ```
 
 "Not analysed yet" means the video has its saved results at any frame rate (and a description, if descriptions are on), so changing the preset never makes every video look new. A slice's report holds only that slice, and the dashboard keeps showing the newest report. **A slice is for dry runs only**: `--apply` with `--limit`, `--new-only` or `--album` is refused, and a real run always covers the whole library. The long first step (the reference faces) still runs, but it is kept between runs.
@@ -276,7 +280,7 @@ Everything here lives in the dashboard's Overview and Videos tabs and needs no N
 | Option | Default | Meaning |
 |---|---|---|
 | `--apply` | off | Write to Photos |
-| `--max-writes N` | 100 | Most changes written per kind per run |
+| `--max-writes N` or `all` | 100 | Most changes written per kind per run; `all` has no limit |
 | `--preset P` | saved setting, else `thorough` | `thorough`, `balanced` or `fast`: how densely videos without a saved result are cut into frames |
 | `--reanalyse` | off | Also redo the saved results that were made under another preset |
 | `--min-frames N` | 2 | Matching frames needed for a confident tag |

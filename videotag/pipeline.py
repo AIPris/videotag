@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import accuracy
-from .albums import current_albums, execute_albums, plan_album_changes
+from .albums import ALBUM_NAME, current_album, execute_album, plan_album_changes
 from .analysis import analyse_videos, is_analysed
 from .calibration import person_models
 from .describe import Describer
@@ -143,11 +143,10 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
         log.info("plan: description of video %d (%d characters)", description_action.video_id,
                  len(description_action.block))
 
-    album_plans = plan_album_changes(people, library.photos, library.videos, actions,
-                                     current_albums(client, state, people))
-    for plan in album_plans:
-        log.info("plan: album '%s' %s, +%d -%d item(s)", plan.name, "created" if plan.create else "updated",
-                 len(plan.add), len(plan.remove))
+    album_plan = plan_album_changes(people, library.videos, actions, current_album(client, state))
+    if album_plan is not None:
+        log.info("plan: album '%s' %s, +%d -%d item(s)", ALBUM_NAME, "created" if album_plan.create else "updated",
+                 len(album_plan.add), len(album_plan.remove))
 
     if options.apply:
         done = execute(client, state, actions, options.max_writes)
@@ -161,7 +160,7 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
         verify_links(client, state)
         written = execute_descriptions(client, state, description_actions, options.max_writes)
         log.info("%d description(s) written", written)
-        moved = execute_albums(client, state, album_plans, options.max_writes)
+        moved = execute_album(client, state, album_plan, options.max_writes)
         log.info("%d album item change(s) written", moved)
     else:
         log.info("dry run: nothing written, pass --apply to write")

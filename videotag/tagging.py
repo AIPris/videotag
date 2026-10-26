@@ -42,6 +42,20 @@ def confident_videos(person_id: int, name: str, videos: list[dict], tag_actions:
     return (tagged | coming) - going
 
 
+def suggested_videos(people: dict[int, str], videos: list[dict], tag_actions: list[TagAction]) -> set[int]:
+    """Videos that carry a `Name?` suggestion of a known person now (ours or the user's), or are about to get one,
+    minus the ones whose last suggestion is about to be taken back."""
+    suggestions = {name + REVIEW_SUFFIX for name in people.values()}
+    pending = {video["id"]: set(_current_tags(video).values()) & suggestions for video in videos}
+    for action in tag_actions:
+        if action.tag_name in suggestions and action.item_id in pending:
+            if action.kind == "add":
+                pending[action.item_id].add(action.tag_name)
+            else:
+                pending[action.item_id].discard(action.tag_name)
+    return {video_id for video_id, tags in pending.items() if tags}
+
+
 def sync_feedback(state: State, videos: list[dict], names: dict[int, str]) -> None:
     """Learn from tag edits made in Photos since the last run (`names` maps person id to name)."""
     current = {video["id"]: _current_tags(video) for video in videos}

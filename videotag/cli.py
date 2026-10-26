@@ -18,9 +18,18 @@ from .admin import (
     cmd_credentials_status,
     cmd_doctor,
 )
-from .albums import delete_albums
+from .albums import delete_album
 from .calibration import calibrate_person, leave_one_out
-from .config import DEFAULT_MAX_WRITES, DEFAULT_PORT, EVIDENCE_DIR, LOG_BACKUPS, LOG_FILE, LOG_MAX_BYTES, REPORTS_DIR
+from .config import (
+    DEFAULT_MAX_WRITES,
+    DEFAULT_PORT,
+    EVIDENCE_DIR,
+    LOG_BACKUPS,
+    LOG_FILE,
+    LOG_MAX_BYTES,
+    NO_LIMIT,
+    REPORTS_DIR,
+)
 from .credentials import CredentialError, load_credentials
 from .describe import Describer
 from .descriptions import delete_descriptions
@@ -32,7 +41,7 @@ from .lock import AlreadyRunning, single_run
 from .matcher import DEFAULT_MATCH, DEFAULT_MIN_FRAMES
 from .pipeline import RunOptions, run
 from .references import build_references
-from .runlog import started_message
+from .runlog import UNDO_STARTED, removed_message, started_message
 from .sampling import DEFAULT_PRESET, PRESETS, Sampling, preset_named
 from .settings import SettingsError
 from .slices import Slice, SliceError, own_albums
@@ -71,6 +80,15 @@ def _positive_whole_number(text: str) -> int:
     return value
 
 
+def _write_limit(text: str) -> int:
+    if text == "all":
+        return NO_LIMIT
+    try:
+        return int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number or 'all'") from None
+
+
 def _slice_of(args) -> Slice:
     return Slice(args.limit, args.new_only, args.album)
 
@@ -102,10 +120,8 @@ def cmd_undo(client: PhotosClient, args) -> None:
     removed = undo_all(client, state)
     unlinked = delete_faces(client, state)
     cleared = delete_descriptions(client, state)
-    deleted = delete_albums(client, state)
-    logging.getLogger("videotag").info(
-        "removed %d tag(s), %d face link(s), %d description block(s) and %d album(s) this tool had created",
-        removed, unlinked, cleared, deleted)
+    deleted = delete_album(client, state)
+    logging.getLogger("videotag").info(removed_message(removed, unlinked, cleared, deleted))
 
 
 def cmd_refs(client: PhotosClient, args) -> None:
@@ -177,7 +193,8 @@ def build_parser() -> argparse.ArgumentParser:
                             help="dry run only: only the videos of this album of yours (`videotag albums` lists them)")
     run_parser.add_argument("--min-frames", type=int, default=DEFAULT_MIN_FRAMES,
                             help="matching frames needed for a confident tag")
-    run_parser.add_argument("--max-writes", type=int, default=DEFAULT_MAX_WRITES, help="most tag changes written per run")
+    run_parser.add_argument("--max-writes", type=_write_limit, default=DEFAULT_MAX_WRITES, metavar="N|all",
+                            help="most changes of each kind written per run, or 'all' for no limit")
     run_parser.add_argument("--threshold", type=float, default=None,
                             help=f"use this similarity for everyone instead of the calibrated values (floor is {DEFAULT_MATCH})")
     run_parser.add_argument("--describe", action=argparse.BooleanOptionalAction, default=None,
@@ -230,8 +247,8 @@ def main(argv: list[str] | None = None) -> int:
         _setup_logging()
     try:
         with single_run() if unattended else nullcontext():
-            if args.command == "run":  # before the login, so a run that dies early still shows up as a stopped run
-                logging.getLogger("videotag").info(started_message(args.apply))
+            if args.command in ("run", "undo"):  # before the login, so one that dies early still shows up as stopped
+                logging.getLogger("videotag").info(started_message(args.apply) if args.command == "run" else UNDO_STARTED)
             if not getattr(args, "needs_client", True):
                 return int(args.run(None, args) or 0)
             credentials, _ = load_credentials()

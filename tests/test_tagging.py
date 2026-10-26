@@ -1,9 +1,10 @@
 from videotag.matcher import Decision, PersonMatch
 from videotag.state import State, WrittenTag
 from videotag.synology import SynologyError
-from videotag.tagging import TagAction, confident_videos, execute, plan_tag_changes, sync_feedback, undo_all
+from videotag.tagging import TagAction, confident_videos, execute, plan_tag_changes, suggested_videos, sync_feedback, undo_all
 
 ALICE = 1
+BOB = 2
 
 
 def video(item_id, *tags):
@@ -117,6 +118,34 @@ def test_a_video_whose_tag_is_being_taken_back_is_no_longer_confident():
     videos = [video(1, (11, "Alice")), video(2, (12, "Alice"))]
     takeback = TagAction("remove", 1, ALICE, "Alice", "auto", 11)
     assert confident_videos(ALICE, "Alice", videos, [takeback]) == {2}
+
+
+def test_suggested_videos_are_the_ones_carrying_a_suggestion_plus_the_ones_about_to_get_one():
+    videos = [video(1, (11, "Alice?")), video(2, (12, "Alice")), video(3), video(4)]
+    new_review = TagAction("add", 3, ALICE, "Alice?", "review")
+    assert suggested_videos({ALICE: "Alice"}, videos, [new_review]) == {1, 3}
+
+
+def test_a_video_whose_only_suggestion_is_being_taken_back_is_no_longer_suggested():
+    videos = [video(1, (11, "Alice?")), video(2, (12, "Alice?"))]
+    takeback = TagAction("remove", 1, ALICE, "Alice?", "review", 11)
+    assert suggested_videos({ALICE: "Alice"}, videos, [takeback]) == {2}
+
+
+def test_a_video_stays_suggested_while_another_person_is_still_suggested_on_it():
+    videos = [video(1, (11, "Alice?"), (12, "Bob?"))]
+    takeback = TagAction("remove", 1, ALICE, "Alice?", "review", 11)
+    assert suggested_videos({ALICE: "Alice", BOB: "Bob"}, videos, [takeback]) == {1}
+
+
+def test_a_suggestion_that_is_upgraded_to_a_confident_tag_is_no_longer_suggested():
+    videos = [video(1, (11, "Alice?"))]
+    upgrade = [TagAction("remove", 1, ALICE, "Alice?", "review", 11), new_auto(1)]
+    assert suggested_videos({ALICE: "Alice"}, videos, upgrade) == set()
+
+
+def test_a_question_mark_tag_that_is_no_persons_suggestion_does_not_count():
+    assert suggested_videos({ALICE: "Alice"}, [video(1, (11, "Sunset?"))], []) == set()
 
 
 def test_a_suggestion_we_already_made_is_not_repeated():

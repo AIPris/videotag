@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from videotag import pipeline
+from videotag.albums import ALBUM_NAME
 from videotag.analysis import Outcome
 from videotag.describe import Description
 from videotag.descriptions import extract_block
@@ -31,6 +32,9 @@ class RecordingClient:
 
     def add_tag(self, item_id, tag_id):
         self.added.append((item_id, tag_id))
+
+    def remove_tag(self, item_id, tag_id):
+        self.added.remove((item_id, tag_id))
 
     def set_description(self, item_id, text):
         self.descriptions[item_id] = text
@@ -84,8 +88,8 @@ def every_video_with(description):
     return analyse
 
 
-def prepare(monkeypatch, description=CAT, video=VIDEO):
-    model = PersonModel(7, "Alice", np.stack([ALICE_FACE]), threshold=0.5)
+def prepare(monkeypatch, description=CAT, video=VIDEO, can_auto=True):
+    model = PersonModel(7, "Alice", np.stack([ALICE_FACE]), threshold=0.5, can_auto=can_auto)
     monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], [video]))
     monkeypatch.setattr(pipeline, "build_references", lambda client, engine, photos: [])
     monkeypatch.setattr(pipeline, "person_models", lambda sets, threshold: [model])
@@ -98,9 +102,9 @@ def run(client, state, apply):
     return pipeline.run(client, None, object(), options, state)
 
 
-def now_reported_by_photos(video, client, tag=True):
-    """The video as Photos would list it after the writes in `client`."""
-    tags = [{"id": 42, "name": "Alice"}] if tag else []
+def now_reported_by_photos(video, client, *tag_names):
+    """The video as Photos would list it after the writes in `client`; by default with our tag `Alice`."""
+    tags = [{"id": 42 + i, "name": name} for i, name in enumerate(tag_names or ("Alice",))]
     return {**video, "additional": {"tag": tags, "description": client.descriptions.get(video["id"], "")}}
 
 
@@ -121,12 +125,39 @@ def test_an_applied_run_writes_the_tag_and_saves_state(tmp_path, monkeypatch):
     assert [t.tag_name for t in State.load(tmp_path / "state.json").written] == ["Alice"]
 
 
-def test_an_applied_run_also_puts_the_matched_video_into_the_persons_album(tmp_path, monkeypatch):
+def test_an_applied_run_puts_a_suggested_video_into_the_to_check_album(tmp_path, monkeypatch):
+    prepare(monkeypatch, can_auto=False)
+    client, state = RecordingClient(), State(tmp_path / "state.json")
+    run(client, state, apply=True)
+    assert client.albums_created == [ALBUM_NAME] and client.album_adds == [(900, [1])]
+    assert State.load(tmp_path / "state.json").review_album == 900
+
+
+def test_a_confident_video_goes_into_no_album(tmp_path, monkeypatch):
     prepare(monkeypatch)
     client, state = RecordingClient(), State(tmp_path / "state.json")
     run(client, state, apply=True)
-    assert client.albums_created == ["Alice"] and client.album_adds == [(900, [1])]
-    assert State.load(tmp_path / "state.json").albums == {7: 900}
+    assert client.albums_created == [] and State.load(tmp_path / "state.json").review_album is None
+
+
+def test_confirming_a_suggestion_in_photos_takes_the_video_out_of_the_album(tmp_path, monkeypatch):
+    prepare(monkeypatch, can_auto=False)
+    client = RecordingClient()
+    run(client, State(tmp_path / "state.json"), apply=True)
+    prepare(monkeypatch, video=now_reported_by_photos(VIDEO, client, "Alice?", "Alice"), can_auto=False)  # the user adds Alice
+    run(client, State.load(tmp_path / "state.json"), apply=True)
+    assert client.album_removes == [(900, [1])]
+
+
+def test_removing_the_suggestion_in_photos_takes_the_video_out_of_the_album_for_good(tmp_path, monkeypatch):
+    prepare(monkeypatch, can_auto=False)
+    client = RecordingClient()
+    run(client, State(tmp_path / "state.json"), apply=True)
+    prepare(monkeypatch, video={**VIDEO, "additional": {"tag": [], "description": ""}}, can_auto=False)  # the user removes Alice?
+    reloaded = State.load(tmp_path / "state.json")
+    run(client, reloaded, apply=True)
+    assert client.album_removes == [(900, [1])] and (1, 7) in reloaded.rejected
+    assert client.added == [(1, 42)]  # the suggestion was not written again
 
 
 def test_an_applied_run_links_the_video_to_the_person_with_one_face_and_a_crop(tmp_path, monkeypatch):
@@ -161,7 +192,16 @@ def test_a_second_applied_run_changes_nothing(tmp_path, monkeypatch):
     prepare(monkeypatch, video=now_reported_by_photos(VIDEO, client))
     run(client, State.load(tmp_path / "state.json"), apply=True)
     assert client.added == [(1, 42)] and len(client.faces[1]) == 1 and len(client.face_uploads) == 1
-    assert len(client.descriptions) == 1 and client.album_adds == [(900, [1])]
+    assert len(client.descriptions) == 1 and client.album_adds == []
+
+
+def test_a_second_applied_run_leaves_the_to_check_album_as_it_is(tmp_path, monkeypatch):
+    prepare(monkeypatch, can_auto=False)
+    client = RecordingClient()
+    run(client, State(tmp_path / "state.json"), apply=True)
+    prepare(monkeypatch, video=now_reported_by_photos(VIDEO, client, "Alice?"), can_auto=False)
+    run(client, State.load(tmp_path / "state.json"), apply=True)
+    assert client.albums_created == [ALBUM_NAME] and client.album_adds == [(900, [1])] and client.album_removes == []
 
 
 def test_deleting_the_description_block_is_a_rejection_that_is_never_undone(tmp_path, monkeypatch):
@@ -175,19 +215,16 @@ def test_deleting_the_description_block_is_a_rejection_that_is_never_undone(tmp_
     assert client.descriptions[1] == "" and 1 in reloaded.description_rejected
 
 
-def test_removing_the_person_from_the_video_in_photos_is_a_rejection_that_also_takes_our_tag_back_and_empties_the_album(
-        tmp_path, monkeypatch):
+def test_removing_the_person_from_the_video_in_photos_is_a_rejection_that_also_takes_our_tag_back(tmp_path, monkeypatch):
     prepare(monkeypatch)
     client, state = RecordingClient(), State(tmp_path / "state.json")
     run(client, state, apply=True)
     client.faces = {}  # the user removes Alice from the video in the People view
     prepare(monkeypatch, video=now_reported_by_photos(VIDEO, client))
-    client.remove_tag = lambda item_id, tag_id: client.added.remove((item_id, tag_id))
     reloaded = State.load(tmp_path / "state.json")
     run(client, reloaded, apply=True)
     assert client.added == [] and client.faces == {}
     assert (1, 7) in reloaded.rejected
-    assert client.album_removes == [(900, [1])]  # in the same run, not only the next one
 
 
 def test_a_video_that_could_not_be_fetched_becomes_an_error_row_and_the_run_goes_on(tmp_path, monkeypatch, caplog):
@@ -327,7 +364,7 @@ def test_an_album_this_tool_made_or_a_missing_one_is_refused_before_the_referenc
     seen = prepare_three(monkeypatch)
     monkeypatch.setattr(pipeline, "build_references", lambda *args: pytest.fail("the reference phase must not start"))
     with pytest.raises(SliceError, match="no album"):
-        sliced(Slice(album_id=album_id), State(tmp_path / "state.json", albums={7: 900}), AlbumsClient())
+        sliced(Slice(album_id=album_id), State(tmp_path / "state.json", review_album=900), AlbumsClient())
     assert seen == []
 
 

@@ -6,7 +6,7 @@ from datetime import datetime
 import pytest
 
 from videotag.dashboard import Sources
-from videotag.launcher import LaunchError, start_run
+from videotag.launcher import LaunchError, start_run, start_undo
 from videotag.lock import AlreadyRunning
 
 NOW = datetime(2026, 10, 25, 15, 19, 40)
@@ -43,6 +43,11 @@ def test_a_dry_run_starts_the_real_command_in_isolated_mode(tmp_path):
 def test_apply_passes_the_write_cap(tmp_path):
     command, _ = launch(tmp_path, apply=True, max_writes=25)
     assert command[5:8] == ["--apply", "--max-writes", "25"]
+
+
+def test_apply_can_write_everything_without_a_cap(tmp_path):
+    command, _ = launch(tmp_path, apply=True, max_writes="all")
+    assert command[5:8] == ["--apply", "--max-writes", "all"]
 
 
 def test_describing_can_be_switched_off(tmp_path):
@@ -89,7 +94,7 @@ def test_the_run_outlives_the_gui_window(tmp_path):
     assert kwargs.get("start_new_session") or kwargs.get("creationflags", 0) & subprocess.CREATE_NEW_PROCESS_GROUP
 
 
-@pytest.mark.parametrize("cap", [0, -3, "ten", True, 100_001])
+@pytest.mark.parametrize("cap", [0, -3, "ten", "ALL", "everything", True, 100_001])
 def test_a_nonsense_write_cap_is_refused(tmp_path, cap):
     with pytest.raises(LaunchError, match="max_writes"):
         launch(tmp_path, apply=True, max_writes=cap)
@@ -102,4 +107,21 @@ def test_nothing_starts_while_another_run_holds_the_lock(tmp_path):
     os.utime(src.lock_file, (NOW.timestamp() - 5, NOW.timestamp() - 5))
     with pytest.raises(AlreadyRunning, match="already in progress"):
         start_run(src, NOW, apply=False, max_writes=100, describe=True, popen=FakePopen)
+    assert FakePopen.launched == []
+
+
+def test_undo_starts_the_real_undo_command_the_same_way_as_a_run(tmp_path):
+    start_undo(sources(tmp_path), NOW, popen=FakePopen)
+    command, kwargs = FakePopen.launched[0]
+    assert command == [sys.executable, "-I", "-m", "videotag", "undo"]
+    assert kwargs["stdout"] == kwargs["stderr"] == kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs.get("start_new_session") or kwargs.get("creationflags", 0) & subprocess.CREATE_NEW_PROCESS_GROUP
+
+
+def test_undo_does_not_start_while_a_run_holds_the_lock(tmp_path):
+    src = sources(tmp_path)
+    src.lock_file.write_text("", encoding="utf-8")
+    os.utime(src.lock_file, (NOW.timestamp() - 5, NOW.timestamp() - 5))
+    with pytest.raises(AlreadyRunning, match="already in progress"):
+        start_undo(src, NOW, popen=FakePopen)
     assert FakePopen.launched == []

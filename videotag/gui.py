@@ -48,7 +48,7 @@ from .dashboard import (
     settings_view,
     spot_check,
 )
-from .launcher import LaunchError, start_run
+from .launcher import LaunchError, start_run, start_undo
 from .lock import AlreadyRunning
 from .settings import Settings, SettingsError
 from .slices import own_albums
@@ -63,7 +63,7 @@ MAX_BODY = 4096
 DRAIN_LIMIT = 1_000_000  # of an oversized request body, read this much so the refusal reaches the client
 PAGES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
-API_VERSION = 3  # the page and the server must agree on this; bump it with any change the page cannot work without
+API_VERSION = 4  # the page and the server must agree on this; bump it with any change the page cannot work without
 MAX_LOGIN_FIELD = 512
 MAX_SPOT_CHECK = 20  # videos per person and group that one spot-check may ask for
 SPOT_CHECK_DEFAULT = 5
@@ -93,9 +93,9 @@ def _list_albums() -> list[dict]:
 class GuiServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port: int, src: Sources, assets: Path, doctor, launch, verify, layout: Layout, clock, albums):
+    def __init__(self, port: int, src: Sources, assets: Path, doctor, launch, undo, verify, layout: Layout, clock, albums):
         super().__init__(("127.0.0.1", port), Handler)
-        self.src, self.assets, self.doctor, self.launch, self.clock = src, assets, doctor, launch, clock
+        self.src, self.assets, self.doctor, self.launch, self.undo, self.clock = src, assets, doctor, launch, undo, clock
         self.verify, self.layout, self.albums = verify, layout, albums
         self.token = secrets.token_urlsafe(24)
         self.health: dict = {"checks": None, "at": None}
@@ -194,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._run_health_check()
         if path == "/api/run":
             return self._start_run()
+        if path == "/api/undo":
+            return self._start_undo()
         if path == "/api/account":
             return self._change_account()
         if path == "/api/settings":
@@ -309,6 +311,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": str(exc)})
         self._json(202, {"started": True})
 
+    def _start_undo(self) -> None:
+        try:
+            self.server.undo(self.server.src, self.server.clock())
+        except AlreadyRunning as exc:
+            return self._json(409, {"error": str(exc)})
+        self._json(202, {"started": True})
+
 
 def _login_from(data: dict) -> Credentials | str:
     """The login in a request, or the reason it cannot be used."""
@@ -327,8 +336,9 @@ def _login_from(data: dict) -> Credentials | str:
 
 
 def make_server(src: Sources, port: int, *, assets: Path = ASSETS_DIR, doctor=_health_checks, launch=start_run,
-                verify=verify_login, layout: Layout | None = None, clock=datetime.now, albums=_list_albums) -> GuiServer:
-    return GuiServer(port, src, assets, doctor, launch, verify, layout or default_layout(), clock, albums)
+                undo=start_undo, verify=verify_login, layout: Layout | None = None, clock=datetime.now,
+                albums=_list_albums) -> GuiServer:
+    return GuiServer(port, src, assets, doctor, launch, undo, verify, layout or default_layout(), clock, albums)
 
 
 def serve(src: Sources, port: int = DEFAULT_PORT, open_browser: bool = True) -> int:

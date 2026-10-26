@@ -164,10 +164,16 @@ def test_people_are_summarised_across_videos(tmp_path):
 def test_the_state_is_counted(tmp_path):
     src = sources(tmp_path)
     save_state(src, written=[tag(1, 7, "Alice", "auto"), tag(2, 7, "Alice?", "review"), tag(3, 7, "Alice", "auto")],
-               confirmed={(4, 7)}, rejected={(5, 7), (6, 7)}, albums={7: 900}, faces={(1, 7): 301},
+               confirmed={(4, 7)}, rejected={(5, 7), (6, 7)}, review_album=900, faces={(1, 7): 301},
                descriptions={1: "b"}, description_rejected={2})
     assert library_view(src)["state"] == {"tags_auto": 2, "tags_review": 1, "confirmed": 1, "rejected": 2, "albums": 1,
                                           "face_links": 1, "descriptions": 1, "descriptions_rejected": 1}
+
+
+def test_no_album_on_record_is_counted_as_none(tmp_path):
+    src = sources(tmp_path)
+    save_state(src)
+    assert library_view(src)["state"]["albums"] == 0
 
 
 def test_an_unreadable_state_is_reported_instead_of_raised(tmp_path):

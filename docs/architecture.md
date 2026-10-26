@@ -58,7 +58,7 @@ Photos has no faces for videos, so the tool borrows the knowledge Photos has abo
 | Tag `Name` | A general tag | Confident match | Match rejected, or `undo` |
 | Tag `Name?` | A general tag | Suggestion | Confirmed, upgraded or rejected, or `undo` |
 | People-page link | A face record on the video (position, crop, person) | Confident or confirmed | Rejected, or `undo` |
-| Album `Name` | A normal album | Person has a confident or confirmed video | Videos leave when their tag is gone; `undo` deletes it |
+| Album `videotag: to check` | One normal album for everybody | A video carries a `Name?` suggestion | The video leaves when its last suggestion is gone (confirmed, upgraded or rejected); `undo` deletes the album |
 | Description | A marked block inside the description | Video described | Block deleted by the user (a rejection), or `undo` |
 
 Every write the tool makes is recorded in `state/state.json`. **Only what is recorded is ever removed**, so the user's own tags, notes, albums and faces are never touched.
@@ -73,7 +73,7 @@ The tool's output is the question and the user's edit in Photos is the answer. O
 |---|---|---|---|
 | tag `Name` or `Name?` | gone | rejected | Remembered; the video is skipped for that person from now on |
 | tag `Name?` | replaced by the user's own `Name` | confirmed | Remembered; the tool removes its own `Name?` |
-| a face record | gone | rejected (People view) | As above, and the tool takes its own tag and album entry back |
+| a face record | gone | rejected (People view) | As above, and the tool takes its own tag back |
 | a description block | gone | rejected | Never written again |
 | a description block | edited | the user owns it | Left alone, also by `undo` |
 | a tag `Name` the user added | present, not recorded | confirmed | Never touched |

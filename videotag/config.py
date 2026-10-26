@@ -4,6 +4,7 @@ Default: `%LOCALAPPDATA%\\videotag` on Windows, `$XDG_DATA_HOME/videotag` (or `~
 Set `VIDEOTAG_HOME` to put it somewhere else, for example a mounted volume in a container.
 """
 import os
+import sys
 from pathlib import Path
 
 
@@ -28,4 +29,5 @@ LOG_MAX_BYTES = 1_000_000  # the log rotates at this size ...
 LOG_BACKUPS = 3            # ... and keeps this many older files (videotag.log.1 is the newest of them)
 
 DEFAULT_MAX_WRITES = 100  # most changes of each kind a run writes unless told otherwise
+NO_LIMIT = sys.maxsize  # `--max-writes all`: more than any library holds, so the write loops need no special case
 DEFAULT_PORT = 8765  # where `videotag gui` listens on 127.0.0.1

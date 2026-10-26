@@ -5,7 +5,17 @@ from logging.handlers import RotatingFileHandler
 import pytest
 
 from videotag.config import LOG_BACKUPS
-from videotag.runlog import last_run, parse_lines, read_lines, read_tail, references_message, slice_message, started_message
+from videotag.runlog import (
+    UNDO_STARTED,
+    last_run,
+    parse_lines,
+    read_lines,
+    read_tail,
+    references_message,
+    removed_message,
+    slice_message,
+    started_message,
+)
 
 START = "2026-10-25 15:19:19,100 INFO run started: dry run"
 LIBRARY = "2026-10-25 15:19:20,200 INFO library: 9 photos, 3 videos"
@@ -209,3 +219,25 @@ def test_the_backups_are_the_files_the_rotating_handler_really_writes(tmp_path):
     assert "run started" not in log.read_text(encoding="utf-8")  # the marker really did rotate away
     run = last_run(read_lines(log), datetime.now())
     assert (run.total, run.done) == (8, 8)
+
+
+# -- an undo is a run too ----------------------------------------------------------------------------------
+
+UNDO = f"2026-10-25 15:19:19,100 INFO {UNDO_STARTED}"
+REMOVED = f"2026-10-25 15:19:31,000 INFO {removed_message(5, 4, 3, 2)}"
+
+
+def test_an_undo_in_progress_is_not_mistaken_for_reading_the_library():
+    run = last_run(lines(UNDO), NOW)
+    assert (run.mode, run.phase, run.finished, run.ended) == ("undo", "Removing what videotag wrote", False, None)
+
+
+def test_an_undo_is_finished_by_its_summary_and_the_summary_says_what_was_removed():
+    run = last_run(lines(UNDO, REMOVED), NOW)
+    assert (run.phase, run.finished, run.ended) == ("Finished", True, datetime(2026, 10, 25, 15, 19, 31))
+    assert run.written == {"tags": 5, "faces": 4, "descriptions": 3, "albums": 2}
+
+
+def test_an_undo_after_a_run_is_the_latest_run():
+    run = last_run(lines(*EARLIER_RUN, UNDO), NOW)
+    assert run.mode == "undo" and run.total is None and run.done == 0

@@ -1,8 +1,8 @@
-"""Starts a run for the GUI.
+"""Starts a run, or an undo, for the GUI.
 
-The run is the real `videotag run` command in its own process, not a call into the pipeline: it takes the run lock
-itself (the GUI never holds it, so an open dashboard cannot make the scheduled task skip a day), writes the same
-log and report as any other run, and keeps going if the GUI is closed.
+The run is the real `videotag run` (or `videotag undo`) command in its own process, not a call into the pipeline:
+it takes the run lock itself (the GUI never holds it, so an open dashboard cannot make the scheduled task skip a
+day), writes the same log and report as any other run, and keeps going if the GUI is closed.
 """
 import subprocess
 import sys
@@ -14,6 +14,7 @@ from .sampling import PRESETS
 from .slices import Slice, SliceError
 
 MAX_WRITES_LIMIT = 100_000
+NO_CAP = "all"  # what `videotag run --max-writes` takes for no limit
 
 
 class LaunchError(ValueError):
@@ -44,11 +45,24 @@ def _detached() -> dict:
     return {"start_new_session": True}
 
 
+def _spawn(src: Sources, now: datetime, command: list[str], popen) -> None:
+    """Start `command` on its own, unless a run holds the lock: its output is the log, nobody reads the pipes."""
+    if run_status(src, now)["state"] == "running":
+        raise AlreadyRunning("a run is already in progress")
+    popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_detached())
+
+
+def start_undo(src: Sources, now: datetime, *, popen=subprocess.Popen) -> None:
+    """`videotag undo` as its own process, which takes the run lock like a run does."""
+    _spawn(src, now, [sys.executable, "-I", "-m", "videotag", "undo"], popen)
+
+
 def start_run(src: Sources, now: datetime, *, apply: bool, max_writes: int, describe: bool, preset: str | None = None,
               limit: int | None = None, new_only: bool = False, album: int | None = None, reanalyse: bool = False,
               popen=subprocess.Popen) -> None:
-    if not isinstance(max_writes, int) or isinstance(max_writes, bool) or not 1 <= max_writes <= MAX_WRITES_LIMIT:
-        raise LaunchError(f"max_writes must be a whole number from 1 to {MAX_WRITES_LIMIT}")
+    whole = isinstance(max_writes, int) and not isinstance(max_writes, bool) and 1 <= max_writes <= MAX_WRITES_LIMIT
+    if not whole and max_writes != NO_CAP:
+        raise LaunchError(f'max_writes must be a whole number from 1 to {MAX_WRITES_LIMIT}, or "{NO_CAP}"')
     if preset is not None and (not isinstance(preset, str) or preset not in PRESETS):
         raise LaunchError(f"preset must be one of: {', '.join(PRESETS)}")
     try:
@@ -57,7 +71,4 @@ def start_run(src: Sources, now: datetime, *, apply: bool, max_writes: int, desc
         raise LaunchError(str(exc)) from None
     if apply and chosen.narrows:
         raise LaunchError("a limit, 'not analysed yet' or an album is for a dry run: a real run always covers the whole library")
-    if run_status(src, now)["state"] == "running":
-        raise AlreadyRunning("a run is already in progress")
-    popen(_command(apply, max_writes, describe, preset, chosen, reanalyse), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-          stderr=subprocess.DEVNULL, **_detached())
+    _spawn(src, now, _command(apply, max_writes, describe, preset, chosen, reanalyse), popen)

@@ -34,14 +34,13 @@ class Slice:
 
 
 def own_albums(client: PhotosClient, state: State) -> list[dict]:
-    """The user's albums. The per-person albums this tool created are not among them."""
-    ours = set(state.albums.values())
-    return [album for album in client.albums() if album["id"] not in ours]
+    """The user's albums. The "to check" album this tool created is not among them."""
+    return [album for album in client.albums() if album["id"] != state.review_album]
 
 
 def album_video_ids(client: PhotosClient, state: State, album_id: int) -> set[int]:
     if album_id not in {album["id"] for album in own_albums(client, state)}:
-        raise SliceError(f"there is no album {album_id} of yours (the albums this tool made for each person do not count); "
+        raise SliceError(f"there is no album {album_id} of yours (the album this tool made does not count); "
                          "`videotag albums` lists yours")
     return client.album_item_ids(album_id)
 

@@ -189,7 +189,7 @@ def _people(rows: list[dict], videos: list[dict]) -> list[dict]:
 def _state_counts(state: State) -> dict:
     levels = [tag.level for tag in state.written]
     return {"tags_auto": levels.count("auto"), "tags_review": levels.count("review"), "confirmed": len(state.confirmed),
-            "rejected": len(state.rejected), "albums": len(state.albums), "face_links": len(state.faces),
+            "rejected": len(state.rejected), "albums": int(state.review_album is not None), "face_links": len(state.faces),
             "descriptions": len(state.descriptions), "descriptions_rejected": len(state.description_rejected)}
 
 

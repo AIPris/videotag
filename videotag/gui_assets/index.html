@@ -17,6 +17,7 @@
   <div class="top-actions">
     <button id="settings-open" type="button" title="Settings every run uses">Settings</button>
     <button id="account-open" type="button" class="account" title="Synology account"></button>
+    <button id="undo-open" type="button" title="Remove everything videotag wrote to Photos">Undo&hellip;</button>
     <button id="run-open" type="button" class="primary">Start a run</button>
   </div>
 </header>
@@ -69,13 +70,27 @@
       <p id="albums-error" class="warning" role="alert" hidden></p>
     </fieldset>
     <label id="run-cap-row" class="cap" hidden>Write at most
-      <input type="number" id="run-cap" min="1" max="100000" value="100"> changes of each kind
+      <input type="number" id="run-cap" min="1" max="100000" step="1" value="100" required> changes of each kind
     </label>
-    <p id="run-warning" class="warning" hidden>Apply changes your Photos library. Removing everything again is only possible from a terminal: <code>videotag undo</code>.</p>
+    <label id="run-all-row" class="check" hidden><input type="checkbox" id="run-all"> No limit: write everything in this run</label>
+    <p id="run-warning" class="warning" hidden>Apply changes your Photos library. Undo (at the top) or <code>videotag undo</code> in a terminal removes everything again.</p>
     <p class="command">Same as running <code id="run-command"></code> in a terminal.</p>
     <div class="dialog-actions">
       <button type="button" id="run-cancel">Cancel</button>
       <button type="submit" id="run-start" class="primary" value="start">Start dry run</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="undo-dialog" aria-labelledby="undo-title">
+  <form method="dialog" id="undo-form">
+    <h2 id="undo-title">Remove everything videotag wrote?</h2>
+    <p>Every tag, person link, description and album that videotag created is taken out of your Photos library. Your own tags, notes, edits and albums are left alone.</p>
+    <p class="sub">Only an Apply run writes them back. Same as running <code>videotag undo</code> in a terminal.</p>
+    <p id="undo-error" class="warning" role="alert" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" id="undo-cancel" class="primary" autofocus>Cancel</button>
+      <button type="submit" id="undo-start" value="start">Remove everything</button>
     </div>
   </form>
 </dialog>

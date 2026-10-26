@@ -1,95 +1,85 @@
-"""A per-person album that shows the person's photos together with their matched videos.
+"""One album, "to check", that lists every video carrying a `Name?` suggestion, so they can be worked through in one place.
 
-Photos cannot add a video to a person's People page (membership is face based), but an album can hold both.
-The album mirrors the tags: it holds the person's photos and every video carrying the plain `Name` tag
-(confident matches and ones the user confirmed, never `Name?` suggestions). Edit tags, not the album:
-a video taken out of the album by hand is added again, a video whose tag is gone leaves the album.
-Photos are only ever added; only videos are removed.
+Photos has no inbox for suggestions, but an album can hold videos. The album mirrors the suggestion tags: a video joins
+when it gets a `Name?` tag and leaves when the last one is gone (the user confirmed it by adding `Name`, or rejected it by
+removing the tag). Edit tags, not the album: a video taken out by hand is added again while its suggestion stands.
+Only videos are ever removed, so anything else the user puts into the album stays.
 """
 import logging
 from dataclasses import dataclass
 
-from .library import listed_people
 from .state import State
 from .synology import PhotosClient, SynologyError
-from .tagging import TagAction, confident_videos
+from .tagging import TagAction, suggested_videos
 
+ALBUM_NAME = "videotag: to check"
 CHUNK = 200
 log = logging.getLogger("videotag")
 
 
 @dataclass(frozen=True)
 class AlbumPlan:
-    person_id: int
-    name: str
     create: bool
     add: tuple[int, ...]
     remove: tuple[int, ...]
 
 
-def plan_album_changes(people: dict[int, str], photos: list[dict], videos: list[dict], tag_actions: list[TagAction],
-                       existing: dict[int, set[int] | None]) -> list[AlbumPlan]:
-    """`existing` maps a person to the item ids in their album, or None when the album does not exist yet."""
-    video_ids = {video["id"] for video in videos}
-    plans = []
-    for person_id, name in people.items():
-        wanted_videos = confident_videos(person_id, name, videos, tag_actions)
-        current = existing.get(person_id)
-        if current is None and not wanted_videos:
-            continue  # an album with only photos would add nothing to the People page
-        person_photos = {photo["id"] for photo in photos if any(p["id"] == person_id for p in listed_people(photo))}
-        add = sorted((wanted_videos | person_photos) - (current or set()))
-        remove = sorted(((current or set()) & video_ids) - wanted_videos)
-        if current is None or add or remove:
-            plans.append(AlbumPlan(person_id, name, current is None, tuple(add), tuple(remove)))
-    return plans
+def plan_album_changes(people: dict[int, str], videos: list[dict], tag_actions: list[TagAction],
+                       existing: set[int] | None) -> AlbumPlan | None:
+    """`existing` holds the item ids in the album, or None when the album does not exist yet. None is returned when
+    nothing has to change."""
+    wanted = suggested_videos(people, videos, tag_actions)
+    if existing is None and not wanted:
+        return None  # no album just to have an empty one
+    current = existing or set()
+    add = sorted(wanted - current)
+    remove = sorted((current & {video["id"] for video in videos}) - wanted)
+    if existing is None or add or remove:
+        return AlbumPlan(existing is None, tuple(add), tuple(remove))
+    return None
 
 
-def current_albums(client: PhotosClient, state: State, people: dict[int, str]) -> dict[int, set[int] | None]:
+def current_album(client: PhotosClient, state: State) -> set[int] | None:
+    """The item ids in the album this tool made, or None when there is none (never made, or deleted by the user)."""
     live = {album["id"] for album in client.albums()}
-    return {person_id: client.album_item_ids(state.albums[person_id]) if state.albums.get(person_id) in live else None
-            for person_id in people}
+    return client.album_item_ids(state.review_album) if state.review_album in live else None
 
 
-def execute_albums(client: PhotosClient, state: State, plans: list[AlbumPlan], budget: int) -> int:
-    """Create albums and move items, at most `budget` items in total. Returns how many items were moved."""
+def execute_album(client: PhotosClient, state: State, plan: AlbumPlan | None, budget: int) -> int:
+    """Create the album and move items, at most `budget` items in all. Returns how many items were moved."""
+    if plan is None:
+        return 0
     done = 0
-    for plan in plans:
-        if done >= budget:
-            log.warning("write limit of %d reached, album changes left for the next run", budget)
-            break
-        try:
-            if plan.create:
-                state.albums[plan.person_id] = client.create_album(plan.name)
-                state.save()
-                log.info("created album '%s'", plan.name)
-            album_id = state.albums[plan.person_id]
-            moves = ((plan.add, client.add_to_album, "added to"), (plan.remove, client.remove_from_album, "removed from"))
-            for ids, change, verb in moves:
-                allowed = ids[:max(budget - done, 0)]
-                for start in range(0, len(allowed), CHUNK):
-                    change(album_id, list(allowed[start:start + CHUNK]))
-                if allowed:
-                    log.info("%d item(s) %s album '%s'", len(allowed), verb, plan.name)
-                done += len(allowed)
-                if len(allowed) < len(ids):
-                    log.warning("write limit of %d reached, album '%s' is partly updated", budget, plan.name)
-                    return done
-        except SynologyError as exc:
-            log.error("album '%s' failed: %s", plan.name, exc)
+    try:
+        if plan.create:
+            state.review_album = client.create_album(ALBUM_NAME)
+            state.save()
+            log.info("created album '%s'", ALBUM_NAME)
+        moves = ((plan.add, client.add_to_album, "added to"), (plan.remove, client.remove_from_album, "removed from"))
+        for ids, change, verb in moves:
+            allowed = ids[:max(budget - done, 0)]
+            for start in range(0, len(allowed), CHUNK):
+                change(state.review_album, list(allowed[start:start + CHUNK]))
+            if allowed:
+                log.info("%d item(s) %s album '%s'", len(allowed), verb, ALBUM_NAME)
+            done += len(allowed)
+            if len(allowed) < len(ids):
+                log.warning("write limit of %d reached, album '%s' is partly updated", budget, ALBUM_NAME)
+                break
+    except SynologyError as exc:
+        log.error("album '%s' failed: %s", ALBUM_NAME, exc)
     return done
 
 
-def delete_albums(client: PhotosClient, state: State) -> int:
-    """Delete every album this tool created. The items in them stay in the library."""
-    deleted = 0
-    for person_id, album_id in list(state.albums.items()):
-        try:
-            client.delete_album(album_id)
-        except SynologyError as exc:
-            log.error("deleting album %d failed: %s", album_id, exc)
-            continue
-        del state.albums[person_id]
-        state.save()
-        deleted += 1
-    return deleted
+def delete_album(client: PhotosClient, state: State) -> int:
+    """Delete the album this tool created, if there is one on record. The items in it stay in the library."""
+    if state.review_album is None:
+        return 0
+    try:
+        client.delete_album(state.review_album)
+    except SynologyError as exc:
+        log.error("deleting album %d failed: %s", state.review_album, exc)
+        return 0
+    state.review_album = None
+    state.save()
+    return 1

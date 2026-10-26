@@ -14,12 +14,14 @@ from .config import LOG_BACKUPS
 TAIL_BYTES = 1_500_000  # the log rotates at 1 MB, so this reads all of one log file
 
 _LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d),(\d{3}) (\w+) (.*)$")
-_STARTED = re.compile(r"^run started: (dry run|apply)$")
+_STARTED = re.compile(r"^run started: (dry run|apply|undo)$")
 _LIBRARY = re.compile(r"^library: \d+ photos, (\d+) videos$")
 _SLICE = re.compile(r"^slice: (\d+) of (\d+) videos$")
 _REFERENCES = re.compile(r"^references: (\d+) of (\d+) photos$")
 _VIDEO = re.compile(r"^(\d+ .*?)( frames=\d+ faces=\d+ \|.*|: .*)$")
 _PLANNED = re.compile(r"^(\d+) tag change\(s\) planned")
+_REMOVED = re.compile(r"^removed (\d+) tag\(s\), (\d+) face link\(s\), (\d+) description block\(s\) "
+                      r"and (\d+) album\(s\) this tool had created$")
 _WRITTEN = {"tags": re.compile(r"^(\d+) tag change\(s\) written$"), "faces": re.compile(r"^(\d+) face change\(s\) written$"),
             "descriptions": re.compile(r"^(\d+) description\(s\) written$"),
             "albums": re.compile(r"^(\d+) album item change\(s\) written$")}
@@ -28,6 +30,15 @@ _WRITTEN = {"tags": re.compile(r"^(\d+) tag change\(s\) written$"), "faces": re.
 def started_message(apply: bool) -> str:
     """The first line of every run; `last_run` looks for exactly this."""
     return f"run started: {'apply' if apply else 'dry run'}"
+
+
+UNDO_STARTED = "run started: undo"  # the first line of `videotag undo`, which the dashboard follows like a run
+
+
+def removed_message(tags: int, faces: int, descriptions: int, albums: int) -> str:
+    """The last line of an undo, what it took out of Photos; `last_run` reads the four numbers back."""
+    return (f"removed {tags} tag(s), {faces} face link(s), {descriptions} description block(s) and {albums} album(s) "
+            "this tool had created")
 
 
 def slice_message(picked: int, of: int) -> str:
@@ -50,16 +61,16 @@ class LogLine:
 
 @dataclass(frozen=True)
 class RunLog:
-    mode: str                          # "dry run" or "apply"
+    mode: str                          # "dry run", "apply" or "undo"
     started: datetime
-    ended: datetime | None             # when the report was saved; None while the run is unfinished
+    ended: datetime | None             # when the report was saved (an undo: when it counted up); None while unfinished
     phase: str
     total: int | None                  # videos in the library, once it has been read
     done: int
     current: str | None                # "<video id> <file name>" of the video handled last
     errors: int
     planned_tags: int | None
-    written: dict[str, int] | None     # what an apply run wrote, by kind
+    written: dict[str, int] | None     # what an apply run wrote, or an undo took out, by kind
     finished: bool
     remaining_seconds: float | None
     references: tuple[int, int] | None = None   # photos done and in all, while the reference faces are built
@@ -106,6 +117,8 @@ def read_lines(path: Path, backups: int = LOG_BACKUPS) -> list[LogLine]:
 def _phase(mode: str, total: int | None, planned: bool, finished: bool, learning: bool) -> str:
     if finished:
         return "Finished"
+    if mode == "undo":
+        return "Removing what videotag wrote"
     if planned:
         return "Writing to Photos" if mode == "apply" else "Planning changes"
     if total is not None:
@@ -127,7 +140,7 @@ def last_run(lines: list[LogLine], now: datetime) -> RunLog | None:
     for line in run[1:]:
         library = _LIBRARY.match(line.text)
         video = _VIDEO.match(line.text)
-        progress, picked = _REFERENCES.match(line.text), _SLICE.match(line.text)
+        progress, picked, removed = _REFERENCES.match(line.text), _SLICE.match(line.text), _REMOVED.match(line.text)
         if progress:
             references, references_last = (int(progress[1]), int(progress[2])), line.time
             references_first = references_first or line.time
@@ -139,6 +152,9 @@ def last_run(lines: list[LogLine], now: datetime) -> RunLog | None:
             done, current, last_video_time = done + 1, video[1], line.time
         elif _PLANNED.match(line.text):
             planned_tags = int(_PLANNED.match(line.text)[1])
+        elif removed:
+            counts = zip(("tags", "faces", "descriptions", "albums"), map(int, removed.groups()), strict=True)
+            ended, written = line.time, dict(counts)
         elif line.text.startswith("report: "):
             ended = line.time
         for kind, pattern in _WRITTEN.items():

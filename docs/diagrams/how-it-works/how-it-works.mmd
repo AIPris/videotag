@@ -1,0 +1,35 @@
+%% src: README.md
+%% legend: pc=Done on your own PC, nothing leaves your network; photos=Lives in Synology Photos; you=You
+flowchart TD
+  subgraph lib [1. What you already have]
+    LIB[(Your Photos library:<br/>photos, videos,<br/>named people)]:::photos
+  end
+
+  subgraph pc [2. videotag works on your PC, on its own]
+    L[Learns what each<br/>person looks like]:::pc
+    W[Watches each video<br/>and picks a few moments]:::pc
+    F[Spots who<br/>is in the video]:::pc
+    D[Describes what happens:<br/>topics, objects, places]:::pc
+  end
+
+  subgraph out [3. Written back into Synology Photos]
+    T[Name tag, person's<br/>page and album]:::photos
+    DE[Short description in<br/>English and German]:::photos
+  end
+
+  subgraph me [4. You]
+    U1([Search and browse<br/>in Photos as usual]):::you
+    U2([Fix anything wrong there.<br/>The tool learns from it<br/>and never undoes<br/>your fixes]):::you
+    U1 --> U2
+  end
+
+  classDef pc fill:#dae8fc,stroke:#6c8ebf
+  classDef photos fill:#d5e8d4,stroke:#82b366
+  classDef you fill:#fff2cc,stroke:#d6b656
+
+  L --> F
+  W --> F
+  W --> D
+  lib ==> pc
+  pc ==> out
+  out ==> me

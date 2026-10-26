@@ -9,6 +9,7 @@ from test_pipeline import RecordingClient, prepare
 
 from videotag import admin, cli, settings
 from videotag.accounts import Identity, Layout, claim_data
+from videotag.config import DEFAULT_MAX_WRITES, NO_LIMIT
 from videotag.credentials import CredentialError, Credentials, load_credentials, store_credentials
 from videotag.dashboard import Sources, run_status
 from videotag.live import LIVE_NAME
@@ -59,7 +60,7 @@ def test_the_whole_log_of_a_run_is_understood_by_the_run_log_reader(main_without
     assert status["state"] == "idle" and run["finished"]
     assert (run["mode"], run["total"], run["done"], run["errors"]) == ("apply", 1, 1, 0)
     assert run["current"] == "1 clip.mp4" and run["planned_tags"] == 1
-    assert run["written"] == {"tags": 1, "faces": 1, "descriptions": 1, "albums": 1}
+    assert run["written"] == {"tags": 1, "faces": 1, "descriptions": 1, "albums": 0}  # a confident match goes into no album
 
 
 def test_a_run_that_cannot_log_in_still_leaves_a_marker_and_the_reason(main_without_the_data_home, monkeypatch, tmp_path, capsys):
@@ -200,18 +201,18 @@ def test_a_limit_that_is_not_a_positive_whole_number_is_refused(run_options, cap
     assert "positive whole number" in capsys.readouterr().err
 
 
-def test_the_albums_command_lists_your_own_albums_and_not_the_ones_made_for_each_person(monkeypatch, tmp_path, capsys):
+def test_the_albums_command_lists_your_own_albums_and_not_the_one_made_by_the_tool(monkeypatch, tmp_path, capsys):
     class Client:
         def albums(self):
-            return [{"id": 5, "name": "Holiday"}, {"id": 900, "name": "Alice"}]
+            return [{"id": 5, "name": "Holiday"}, {"id": 900, "name": "To check"}]
 
     monkeypatch.setattr(cli, "claim_data", lambda credentials: None)
     monkeypatch.setattr(cli, "load_credentials", lambda: (object(), "test"))
     monkeypatch.setattr(cli, "PhotosClient", lambda credentials: nullcontext(Client()))
-    monkeypatch.setattr(cli.State, "load", classmethod(lambda cls: State(tmp_path / "state.json", albums={7: 900})))
+    monkeypatch.setattr(cli.State, "load", classmethod(lambda cls: State(tmp_path / "state.json", review_album=900)))
     assert cli.main(["albums"]) == 0
     out = capsys.readouterr().out
-    assert "Holiday" in out and "5" in out and "Alice" not in out
+    assert "Holiday" in out and "5" in out and "To check" not in out
 
 
 # -- the account guard ---------------------------------------------------------------------------
@@ -304,3 +305,32 @@ def test_a_run_is_told_where_to_keep_its_evidence_and_its_accuracy_report(run_op
     monkeypatch.setattr(cli, "run", lambda client, engine, describer, options, state, live=None, **more: seen.append(more) or [])
     assert cli.main(["run"]) == 0
     assert seen == [{"evidence_dir": tmp_path / "evidence", "accuracy_file": tmp_path / "reports" / "accuracy.json"}]
+
+
+# -- the write cap ----------------------------------------------------------------------------------------
+
+def test_the_write_cap_is_a_number_and_all_means_no_limit(run_options):
+    for flags in ([], ["--max-writes", "7"], ["--max-writes", "all"]):
+        assert cli.main(["run", "--apply", *flags]) == 0
+    assert [options.max_writes for options, _ in run_options] == [DEFAULT_MAX_WRITES, 7, NO_LIMIT]
+
+
+@pytest.mark.parametrize("cap", ["lots", "All", "1.5", ""])
+def test_a_write_cap_that_is_neither_a_whole_number_nor_all_is_refused(run_options, capsys, cap):
+    with pytest.raises(SystemExit):
+        cli.main(["run", "--apply", "--max-writes", cap])
+    assert "whole number or 'all'" in capsys.readouterr().err and run_options == []
+
+
+# -- undo ---------------------------------------------------------------------------------------------------
+
+def test_an_undo_leaves_the_marker_and_the_summary_the_dashboard_reads(main_without_the_data_home, monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "load_credentials", lambda: (object(), "test"))
+    monkeypatch.setattr(cli, "PhotosClient", lambda credentials: nullcontext(object()))
+    monkeypatch.setattr(cli.State, "load", classmethod(lambda cls: State(tmp_path / "state.json")))
+    for name, removed in (("undo_all", 5), ("delete_faces", 4), ("delete_descriptions", 3), ("delete_album", 2)):
+        monkeypatch.setattr(cli, name, lambda client, state, removed=removed: removed)
+    assert cli.main(["undo"]) == 0
+    run = the_dashboard_view_of(main_without_the_data_home, tmp_path)["run"]
+    assert (run["mode"], run["finished"]) == ("undo", True)
+    assert run["written"] == {"tags": 5, "faces": 4, "descriptions": 3, "albums": 2}

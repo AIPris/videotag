@@ -164,7 +164,8 @@ def _check_state() -> Check:
     except StateError as exc:
         return Check("state file", "fail", str(exc))
     return Check("state file", "ok", f"{len(state.written)} tags, {len(state.faces)} face links, "
-                                     f"{len(state.descriptions)} descriptions, {len(state.albums)} albums on record")
+                                     f"{len(state.descriptions)} descriptions, "
+                                     f"{'an' if state.review_album is not None else 'no'} album on record")
 
 
 def _check_settings() -> Check:

@@ -5,7 +5,7 @@
 
 const TOKEN = document.querySelector('meta[name="videotag-token"]').content;
 const PAGE_SIZE = 100;
-const API_VERSION = 3;  // must equal API_VERSION in gui.py: an update changes this page at once, but an open dashboard keeps its old code
+const API_VERSION = 4;  // must equal API_VERSION in gui.py: an update changes this page at once, but an open dashboard keeps its old code
 
 const app = {
   status: null, library: null, history: null, version: null, settings: null,
@@ -126,6 +126,21 @@ function personChip(person) {
 
 // -- the run strip -------------------------------------------------------------------------------
 
+function undoCopy(state, run) {
+  if (state === "running") {
+    return run.finished ? {title: "Finishing up", lead: "Everything is removed and the undo is closing."}
+      : {title: run.phase, lead: "Taking the tags, person links, descriptions and albums that videotag created out of Photos. Yours are left alone."};
+  }
+  if (state === "interrupted") {
+    return {title: "The last undo stopped before it finished",
+            lead: `It started ${when(run.started)}. The log shows why. Run it again to remove what is left.`};
+  }
+  const w = run.written || {};
+  return {title: `Last undo finished ${when(run.ended)}`,
+          lead: `Removed from Photos: ${plural(w.tags || 0, "tag")}, ${plural(w.faces || 0, "person link")}, `
+              + `${plural(w.descriptions || 0, "description")}, ${plural(w.albums || 0, "album")}.`};
+}
+
 function runCopy(state, run, report) {
   if (state === "never" && report) {  // reports exist, but the log has no run marker: it predates this dashboard
     return {title: `Last report saved ${when(report.time)}`,
@@ -138,6 +153,7 @@ function runCopy(state, run, report) {
   if (state === "running" && !run) {
     return {title: "Starting a run", lead: "Logging in and reading the library."};
   }
+  if (run && run.mode === "undo") return undoCopy(state, run);
   if (state === "running" && run.finished) {  // the report is saved, the process has not exited yet
     return {title: "Finishing up", lead: "The report is saved and the run is closing."};
   }
@@ -202,7 +218,7 @@ function renderRun() {
   badge.className = `badge ${state}`;
   badge.textContent = {running: "Running", idle: "Idle", interrupted: "Stopped early",
                        never: app.library && app.library.report ? "Idle" : "No run yet"}[state];
-  $("run-open").disabled = state === "running";
+  $("run-open").disabled = $("undo-open").disabled = state === "running";
   $("run-open").textContent = state === "running" ? "Run in progress" : "Start a run";
   document.title = state === "running" && analysing ? `videotag: ${run.done}/${run.total}`
     : learning ? `videotag: ${run.references.done}/${run.references.total} photos` : "videotag";
@@ -577,7 +593,8 @@ function wireTabs() {
 
 function runOptions() {
   const apply = document.querySelector('input[name="mode"]:checked').value === "apply";
-  const options = {apply, describe: $("run-describe").checked, max_writes: Number($("run-cap").value)};
+  const options = {apply, describe: $("run-describe").checked};
+  if (apply) options.max_writes = $("run-all").checked ? "all" : $("run-cap").valueAsNumber;  // NaN while blank: the field is `required`, so the browser stops the submit
   if ($("run-preset").value) options.preset = $("run-preset").value;
   if (!apply) {  // a slice is for a dry run: an apply run always covers the whole library
     const limit = $("run-limit").value.trim();
@@ -590,14 +607,15 @@ function runOptions() {
 
 function runCommand(o) {  // only what differs from the saved settings: those are what a terminal would need to be told
   const saved = app.settings || {};
-  return ["videotag run", o.apply && `--apply --max-writes ${o.max_writes}`, o.preset && o.preset !== saved.preset && `--preset ${o.preset}`,
+  return ["videotag run", o.apply && `--apply --max-writes ${Number.isNaN(o.max_writes) ? "<number>" : o.max_writes}`, o.preset && o.preset !== saved.preset && `--preset ${o.preset}`,
           o.describe !== saved.describe && (o.describe ? "--describe" : "--no-describe"), o.limit && `--limit ${o.limit}`,
           o.new_only && "--new-only", o.album && `--album ${o.album}`].filter(Boolean).join(" ");
 }
 
 function refreshRunDialog() {
   const o = runOptions();
-  $("run-cap-row").hidden = $("run-warning").hidden = !o.apply;
+  $("run-cap-row").hidden = $("run-all-row").hidden = $("run-warning").hidden = !o.apply;
+  $("run-cap").disabled = !o.apply || $("run-all").checked;  // a field that is hidden or unused must not be checked: it would block the submit silently
   $("run-slice").hidden = o.apply;
   $("run-start").textContent = o.apply ? "Apply changes" : "Start dry run";
   $("run-command").textContent = runCommand(o);
@@ -640,6 +658,7 @@ async function openRunDialog() {
   $("run-describe").checked = app.settings.describe;
   $("run-limit").value = "";
   $("run-new").checked = false;
+  $("run-all").checked = false;  // writing everything is chosen on purpose each time, never left over from the last run
   fill($("run-album"), el("option", {value: ""}, "The whole library"));
   $("albums-error").hidden = true;
   $("run-dialog").showModal();
@@ -664,6 +683,33 @@ function wireRunDialog() {
     }
     dialog.close();
     toast(options.apply ? "Apply run started. Progress shows at the top." : "Dry run started. Progress shows at the top.");
+    poll();
+  });
+}
+
+// -- undo ----------------------------------------------------------------------------------------
+
+function wireUndoDialog() {
+  const dialog = $("undo-dialog");
+  $("undo-open").addEventListener("click", () => {
+    $("undo-error").hidden = true;
+    dialog.showModal();
+  });
+  $("undo-cancel").addEventListener("click", () => dialog.close());
+  $("undo-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("undo-start").disabled = true;  // one click is one undo
+    try {
+      await api("/api/undo", {method: "POST"});
+    } catch (error) {
+      $("undo-error").textContent = error.message;
+      $("undo-error").hidden = false;
+      return;
+    } finally {
+      $("undo-start").disabled = false;
+    }
+    dialog.close();
+    toast("Undo started. Progress shows at the top.");
     poll();
   });
 }
@@ -794,7 +840,7 @@ function accountEffect() {
   return [
     returning ? "The saved data set aside for this account comes back." : "This account starts with no saved data.",
     holder ? `Any saved data of ${holder.label} (results, caches, reports and log) is set aside. Tags videotag wrote there stay in Photos. `
-      + "To remove them, run videotag undo while that account is active, before switching." : "",
+      + "To remove them, use Undo (or videotag undo) while that account is active, before switching." : "",
   ].join(" ").trim();
 }
 
@@ -897,6 +943,7 @@ async function poll() {
 async function start() {
   wireTabs();
   wireRunDialog();
+  wireUndoDialog();
   wireSettingsDialog();
   wireAccountDialog();
   buildVideosView();
