@@ -84,12 +84,13 @@ def test_keeping_again_replaces_the_crops_and_removes_those_of_people_who_no_lon
     evidence.keep(VIDEO, frames, [faces_of(ALICE_FACE, BOB_FACE)] * 3 + alice_in_frames()[3:])
     evidence.keep(VIDEO, frames, alice_in_frames(0, 1, 2))
     assert list(crops(tmp_path / "evidence", 12)) == [7]
-    assert sorted(path.name for path in (tmp_path / "evidence" / "12").iterdir()) == ["7-1.jpg", "7-2.jpg", "7-3.jpg"]
+    assert sorted(path.name for path in (tmp_path / "evidence" / "12").glob("*.jpg")) == ["7-1.jpg", "7-2.jpg", "7-3.jpg"]
 
 
 def test_nothing_is_left_half_written_and_no_temporary_file_stays(evidence, frames, tmp_path):
     evidence.keep(VIDEO, frames, alice_in_frames(0, 1, 2))
-    assert all(path.suffix == ".jpg" and cv2.imread(str(path)) is not None for path in (tmp_path / "evidence" / "12").iterdir())
+    assert not list((tmp_path / "evidence" / "12").glob("*.part"))
+    assert all(cv2.imread(str(path)) is not None for path in (tmp_path / "evidence" / "12").glob("*.jpg"))
 
 
 def test_frames_that_do_not_line_up_with_the_faces_are_never_cropped(evidence, frames, tmp_path, caplog):
@@ -168,3 +169,32 @@ def test_a_later_success_clears_the_memory_of_a_failure(evidence, frames, tmp_pa
 def test_the_memory_of_a_failure_is_a_file_in_the_video_folder_and_never_listed_as_a_crop(evidence, frames, tmp_path):
     evidence.keep(VIDEO, frames[:4], alice_in_frames(0, 1, 2))
     assert crops(tmp_path / "evidence", 12) == {} and (tmp_path / "evidence" / "12" / "skipped.txt").exists()
+
+
+def test_changed_models_that_swap_the_same_peoples_winners_require_new_crops(evidence, frames, tmp_path):
+    faces = [faces_of(ALICE_FACE)] * 3 + [faces_of(BOB_FACE)] * 3
+    evidence.keep(VIDEO, frames, faces)
+    swapped = Evidence([PersonModel(7, "Alice", BOB_REFS, 0.8), PersonModel(8, "Bob", ALICE_REFS, 0.8)], 2,
+                       tmp_path / "evidence")
+    assert swapped.missing(VIDEO, faces) is True
+    swapped.keep(VIDEO, frames, faces)
+    assert shows_frame(tmp_path / "evidence" / "12" / "7-1.jpg") == 3
+    assert swapped.missing(VIDEO, faces) is False
+
+
+def test_rebuilt_faces_and_changed_files_invalidate_existing_crops(evidence, frames):
+    evidence.keep(VIDEO, frames, alice_in_frames(0, 1, 2))
+    assert evidence.missing(VIDEO, alice_in_frames(3, 4, 5)) is True
+    assert evidence.missing({**VIDEO, "time": 2}, alice_in_frames(0, 1, 2)) is True
+
+
+def test_changed_winners_invalidate_a_skipped_marker(evidence, frames):
+    evidence.keep(VIDEO, frames[:1], alice_in_frames(0, 1, 2))
+    assert evidence.missing(VIDEO, alice_in_frames(3, 4, 5)) is True
+
+
+def test_old_crops_without_provenance_are_rebuilt(evidence, tmp_path):
+    folder = tmp_path / "evidence" / "12"
+    folder.mkdir(parents=True)
+    (folder / "7-1.jpg").write_bytes(b"legacy crop")
+    assert evidence.missing(VIDEO, alice_in_frames(0, 1, 2)) is True

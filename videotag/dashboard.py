@@ -150,7 +150,7 @@ def _description_status(video_id: int, state: State, description: dict | None) -
 
 def _video(src: Sources, row: dict, state: State, levels: dict) -> dict:
     video_id = row["video_id"]
-    evidence_id = row.get("twin_of") or video_id  # a copy of a file shows the crops of the video that was analysed
+    evidence_id = row.get("evidence_id") or row.get("twin_of") or video_id
     shown = crops(src.evidence_dir, evidence_id) if row.get("matches") else {}
     people = []
     for match in row.get("matches", []):
@@ -231,7 +231,10 @@ def _stamp(path: Path) -> str:
 def data_version(src: Sources) -> str:
     """Changes whenever a new report or a new state is saved, so the page knows when to reload the library."""
     latest = next(iter(_report_files(src)), None)
-    return f"{latest.name if latest else '-'}|{_stamp(src.state_file)}|{_stamp(src.live_file)}|{_stamp(src.accuracy_file)}"
+    lock, taken = _lock(src, datetime.now())
+    lifecycle = taken.isoformat() if lock["present"] and not lock["stale"] else "idle"
+    return (f"{latest.name if latest else '-'}|{_stamp(src.state_file)}|{_stamp(src.live_file)}"
+            f"|{_stamp(src.accuracy_file)}|{lifecycle}")
 
 
 # -- the run that is going on, or the last one --------------------------------------------------

@@ -26,6 +26,16 @@ def formatted_log(caplog) -> str:
     return "\n".join(formatter.format(record) for record in caplog.records)
 
 
+def test_negative_write_limit_is_rejected_during_argument_parsing():
+    import argparse
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._write_limit("-1")
+
+
+def test_zero_write_limit_is_allowed():
+    assert cli._write_limit("0") == 0
+
+
 @pytest.fixture
 def main_without_the_data_home(monkeypatch, tmp_path, caplog):
     """main() with no log file, no run lock and reports in a temporary folder: tests never touch the real data home."""

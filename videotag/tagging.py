@@ -110,8 +110,9 @@ def _tag_id(client: PhotosClient, name: str, known: dict[str, int]) -> int:
     return known[name]
 
 
-def execute(client: PhotosClient, state: State, actions: list[TagAction], max_writes: int) -> int:
-    """Perform at most `max_writes` actions, saving the state after each. Returns how many were done."""
+def execute(client: PhotosClient, state: State, actions: list[TagAction], max_writes: int,
+            successful: list[TagAction] | None = None) -> int:
+    """Perform at most `max_writes` actions, saving after each. Optionally collect the actions actually done."""
     known: dict[str, int] = {}
     done = 0
     for action in actions:
@@ -132,6 +133,8 @@ def execute(client: PhotosClient, state: State, actions: list[TagAction], max_wr
             continue
         state.save()
         done += 1
+        if successful is not None:
+            successful.append(action)
         log.info("%s '%s' on item %d", action.kind, action.tag_name, action.item_id)
     return done
 

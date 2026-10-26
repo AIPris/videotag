@@ -12,18 +12,22 @@ a crop fails) that is written down (`skipped.txt` in the video's folder) so the 
 is tried again when the file or its faces change. A failed download is not written down: that is worth trying again.
 """
 import contextlib
+import hashlib
+import json
 import logging
 import os
 import re
 from pathlib import Path
 
+from .facecache import file_key
 from .faces import crop_jpeg
-from .matcher import Decision, PersonModel, hit_sightings, match_video
+from .matcher import Decision, PersonModel, claim, hit_sightings, match_video
 
 log = logging.getLogger("videotag")
 
 _CROP = re.compile(r"^(\d+)-(\d+)\.jpg$")
 SKIPPED = "skipped.txt"  # in a video's folder: the faces for which no crops could be made
+PROVENANCE = "provenance.json"
 
 
 def crops(folder: Path, video_id: int) -> dict[int, list[str]]:
@@ -53,18 +57,40 @@ class Evidence:
         """Whether someone the video matches has no crops yet, so the video has to be cut to make them.
         Crops of people the video no longer matches are removed on the way: that needs no frames. Faces for which crops
         could not be made before count as done."""
-        wanted, present = self._wanted(faces), crops(self._folder, video["id"])
+        wanted, present = self._provenance(video, faces), crops(self._folder, video["id"])
+        saved = self._read_provenance(video)
         for person_id in present.keys() - wanted.keys():
             self._remove(video["id"], present[person_id])
-        return bool(wanted.keys() - present.keys()) and not self._given_up(video, faces)
+        outdated = {person for person, signature in wanted.items()
+                    if saved.get(str(person)) != signature or person not in present}
+        for person_id in outdated & present.keys():
+            self._remove(video["id"], present[person_id])  # never show a crop of an old winner while rebuilding
+        return bool(outdated) and not self._given_up(video, wanted)
 
-    @staticmethod
-    def _identity(video: dict, faces: list[list]) -> str:
-        return f"{video['filesize']}|{video['time']}|{len(faces)}"  # the file, and the faces' frames (they change with the rule)
+    def _provenance(self, video: dict, faces: list[list]) -> dict[int, str]:
+        """Bind each crop set to the file and the few actual winning faces, without hashing the whole video or cache."""
+        found = {}
+        for person_id, index in self._wanted(faces).items():
+            sightings = []
+            for sighting in hit_sightings(faces, self._models, index):
+                embeddings = [face.embedding.tolist() for face in faces[sighting.frame_index]
+                              if face.box == sighting.box and claim(face.embedding, self._models)[0] == index]
+                sightings.append((sighting.frame_index, sighting.box, embeddings))
+            identity = json.dumps([file_key(video), len(faces), sightings], sort_keys=True)
+            found[person_id] = hashlib.sha256(identity.encode()).hexdigest()
+        return found
 
-    def _given_up(self, video: dict, faces: list[list]) -> bool:
+    def _read_provenance(self, video: dict) -> dict:
         try:
-            return (self._folder / str(video["id"]) / SKIPPED).read_text(encoding="utf-8") == self._identity(video, faces)
+            value = json.loads((self._folder / str(video["id"]) / PROVENANCE).read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _given_up(self, video: dict, signatures: dict[int, str]) -> bool:
+        try:
+            saved = (self._folder / str(video["id"]) / SKIPPED).read_text(encoding="utf-8")
+            return saved == json.dumps(signatures, sort_keys=True)
         except OSError:
             return False
 
@@ -73,7 +99,9 @@ class Evidence:
         folder.mkdir(parents=True, exist_ok=True)
         for leftover in folder.glob("*.part"):
             leftover.unlink(missing_ok=True)
-        (folder / SKIPPED).write_text(self._identity(video, faces), encoding="utf-8")
+        self._remove(video["id"], [name for files in crops(self._folder, video["id"]).values() for name in files])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / SKIPPED).write_text(json.dumps(self._provenance(video, faces), sort_keys=True), encoding="utf-8")
 
     def keep(self, video: dict, frames: list[Path], faces: list[list]) -> None:
         """Cut the crops of everyone the video matches, replacing any earlier ones."""
@@ -99,6 +127,10 @@ class Evidence:
         (folder / SKIPPED).unlink(missing_ok=True)
         self._remove(video["id"], [name for files in crops(self._folder, video["id"]).values() for name in files
                                    if name not in written])
+        if written:
+            scratch = folder / (PROVENANCE + ".part")
+            scratch.write_text(json.dumps(self._provenance(video, faces), sort_keys=True), encoding="utf-8")
+            os.replace(scratch, folder / PROVENANCE)
 
     def _remove(self, video_id: int, names: list[str]) -> None:
         folder = self._folder / str(video_id)

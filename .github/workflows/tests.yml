@@ -22,3 +22,16 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: python -m pytest -q
+
+  javascript:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --check videotag/gui_assets/app.js
+      - run: node --test tests/gui_app.test.cjs

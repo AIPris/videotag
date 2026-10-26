@@ -1,8 +1,8 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from videotag import facecache
+from videotag import dashboard, facecache
 from videotag.dashboard import (
     Sources,
     accuracy_view,
@@ -274,6 +274,17 @@ def test_the_data_version_changes_when_a_run_writes_its_accuracy_report(tmp_path
     assert data_version(src) != before
 
 
+def test_a_twins_explicit_evidence_source_overrides_its_first_twins_crops(tmp_path):
+    src = sources(tmp_path)
+    save_report(src, "run-20261024-101500.json", [row(2, [match(7, "Alice", "auto")], twin_of=1, evidence_id=2)])
+    for video_id in (1, 2):
+        folder = src.evidence_dir / str(video_id)
+        folder.mkdir(parents=True)
+        (folder / f"7-{video_id}.jpg").write_bytes(b"crop")
+    video = library_view(src)["videos"][0]
+    assert video["evidence_id"] == 2 and video["people"][0]["crops"] == ["7-2.jpg"]
+
+
 def test_the_data_version_changes_with_every_row_the_run_makes(tmp_path):
     src = sources(tmp_path)
     live = live_rows(src, row(1))
@@ -282,6 +293,41 @@ def test_the_data_version_changes_with_every_row_the_run_makes(tmp_path):
     after = data_version(src)
     live.finish()
     assert len({before, after, data_version(src)}) == 3
+
+
+def test_data_version_changes_when_a_live_runs_lock_disappears(tmp_path, monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls):
+            return NOW
+    monkeypatch.setattr(dashboard, "datetime", Clock)
+    src = sources(tmp_path)
+    live_rows(src, row(1))
+    lock(src, 5, taken_ago=25)
+    before = data_version(src)
+    assert library_view(src, NOW)["report"]["live"]
+    src.lock_file.unlink()
+    assert data_version(src) != before
+    assert library_view(src, NOW)["report"] is None
+
+
+def test_data_version_expires_a_live_run_without_changing_on_heartbeats(tmp_path, monkeypatch):
+    clock = [NOW]
+    class Clock(datetime):
+        @classmethod
+        def now(cls):
+            return clock[0]
+    monkeypatch.setattr(dashboard, "datetime", Clock)
+    src = sources(tmp_path)
+    live_rows(src, row(1))
+    lock(src, 5, taken_ago=25)
+    before = data_version(src)
+    os.utime(src.lock_file, (NOW.timestamp(), NOW.timestamp()))
+    assert data_version(src) == before
+    expired = NOW + timedelta(seconds=STALE_AFTER_SECONDS)
+    clock[0] = expired
+    assert data_version(src) != before
+    assert library_view(src, expired)["report"] is None
 
 
 # -- twins ----------------------------------------------------------------------------------------------

@@ -47,7 +47,7 @@ def current_album(client: PhotosClient, state: State) -> set[int] | None:
 
 def execute_album(client: PhotosClient, state: State, plan: AlbumPlan | None, budget: int) -> int:
     """Create the album and move items, at most `budget` items in all. Returns how many items were moved."""
-    if plan is None:
+    if plan is None or budget <= 0:
         return 0
     done = 0
     try:

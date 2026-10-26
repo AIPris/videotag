@@ -258,7 +258,7 @@ Everything here lives in the dashboard's Overview and Videos tabs and needs no N
 - **Faces behind a match.** Open a video in the Videos tab: under each person the best few faces that made it a match are shown (the crops are kept in `state\evidence` and never uploaded). A video that was analysed before crops existed gets them the next time a run sees that it matches someone, which downloads it once more.
 - **Spot-check.** *Draw a sample* picks a random few matches per person (confident ones and suggestions separately) from the latest report. Click a file name to open the video in Photos and look. Matches you already confirmed or removed in Photos, copies of a file and failed videos are left out.
 - **How far the matching can be trusted.** Worked out by every run from the reference faces: how many there are and of what kind, the threshold, whether confident tags are allowed, how many of a person's own faces would be recognised, and which people's faces resemble each other (the thresholds are raised to keep those apart).
-- **The same file more than once.** A file that sits in Photos under two video numbers (same name, size and time) is analysed once and both videos get the same tags and description. The Overview lists them so you can delete the extra copy in Photos; videotag never deletes a video.
+- **The same file more than once.** Copies with the same name, size and time reuse analysis for results they do not already have. Each video's valid saved faces and description are kept, including results made under different presets; Re-analyse explicitly replaces faces made under another preset. The Overview lists copies so you can delete an extra one in Photos; videotag never deletes a video.
 
 ## Commands and options
 

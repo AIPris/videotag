@@ -90,6 +90,13 @@ def test_no_plan_moves_nothing(tmp_path):
     assert client.created == [] and client.added == [] and client.removed == []
 
 
+def test_zero_budget_never_creates_an_album_or_moves_items(tmp_path):
+    client, state = FakeClient(), State(tmp_path / "state.json")
+    assert execute_album(client, state, AlbumPlan(True, (10,), ()), budget=0) == 0
+    assert client.created == [] and client.added == [] and state.review_album is None
+    assert not state.path.exists()
+
+
 def test_the_write_limit_cuts_an_album_update_short(tmp_path):
     client, state = FakeClient(), State(tmp_path / "state.json", review_album=7)
     moved = execute_album(client, state, AlbumPlan(False, (1, 2, 3, 4), (9,)), budget=3)

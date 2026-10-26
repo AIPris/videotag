@@ -84,9 +84,12 @@ def _write_limit(text: str) -> int:
     if text == "all":
         return NO_LIMIT
     try:
-        return int(text)
+        value = int(text)
     except ValueError:
         raise argparse.ArgumentTypeError("must be a whole number or 'all'") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be a nonnegative whole number or 'all'")
+    return value
 
 
 def _slice_of(args) -> Slice:

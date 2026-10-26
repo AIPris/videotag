@@ -119,8 +119,10 @@ question (you could object); everything else is what was asked for or chosen.
   needs no extra call.
 - A twin is analysed once and its result is copied to the other id, so both videos get tags and descriptions.
 - The GUI lists twins so they can be cleaned up in Photos. The tool never deletes a video.
-- **Built:** the first of a set of twins is analysed and each later one gets a copy, saved under its own id (so it counts as
-  analysed from then on and "not analysed yet" does not pick it up again). A twin whose original fails gets the same error.
+- **Built:** the first of a set of twins is analysed and each later one reuses any results it is missing, saved under its own id
+  (so it counts as analysed from then on and "not analysed yet" does not pick it up again). Each twin keeps its valid saved
+  results, even when another preset made them; explicit reanalysis replaces faces made under another preset. A twin without
+  saved faces gets the original's error if analysis fails; an independently cached twin keeps its usable result.
   Rows say `twin_of`, and the Overview lists the files that sit in Photos under more than one number. The real library has
   such pairs: two of the longest clips used for the check above are the same 1,059 s file.
 

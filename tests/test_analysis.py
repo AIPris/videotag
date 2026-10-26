@@ -396,6 +396,93 @@ def test_without_a_describer_a_twin_is_copied_without_a_description(world):
     assert second.description is None and same_faces(second.faces, first.faces)
 
 
+def test_twins_keep_independent_cached_rules_faces_and_descriptions(world):
+    first, second = video(1), twin(2, of=1)
+    facecache.save(1, first, [[]] * 78, PRESETS["fast"])
+    facecache.save(2, second, [[]] * 200, THOROUGH)
+    descache.save(1, descache.cache_key(first), Description("first", "eins"))
+    descache.save(2, descache.cache_key(second), Description("second", "zwei"))
+    outcomes = analyse_these(world, [first, second])
+    assert [len(o.faces) for o in outcomes] == [78, 200]
+    assert [o.sampling for o in outcomes] == [PRESETS["fast"], THOROUGH]
+    assert [o.description.summary_en for o in outcomes] == ["first", "second"]
+    assert len(facecache.load(2, second).faces) == 200 and world.prepared == []
+
+
+def test_a_cached_twin_survives_the_first_videos_download_failure(world):
+    second = twin(2, of=1)
+    facecache.save(2, second, [[]] * 200, THOROUGH)
+    descache.save(2, descache.cache_key(second), Description("saved", "gespeichert"))
+    world.download_fails[1] = SynologyError("download refused")
+    first, cached = analyse_these(world, [video(1), second])
+    assert first.error is not None and cached.error is None and len(cached.faces) == 200
+    assert cached.description.summary_en == "saved"
+
+
+def test_twins_copy_completed_unusable_descriptions(world):
+    world.describe = lambda frames: None
+    analyse_these(world, [video(1), twin(2, of=1)])
+    assert analysis.is_analysed(twin(2, of=1), describe=True)
+    assert descache.load(2, descache.cache_key(twin(2, of=1))) == (True, None)
+
+
+def test_twins_leave_model_failures_uncached(world):
+    def broken(frames):
+        raise RuntimeError("GPU unavailable")
+    world.describe = broken
+    analyse_these(world, [video(1), twin(2, of=1)])
+    assert not analysis.is_analysed(video(1), describe=True)
+    assert not analysis.is_analysed(twin(2, of=1), describe=True)
+
+
+def test_independent_cached_twins_keep_their_own_evidence_source(world):
+    second = twin(2, of=1)
+    facecache.save(2, second, [[]] * 200, PRESETS["fast"])
+    descache.save(2, descache.cache_key(second), None)
+    hook = Hook()
+    outcomes = analyse_these(world, [video(1), second], evidence=hook)
+    assert outcomes[1].evidence_id == 2
+    assert hook.kept == [(1, FRAMES_PER_VIDEO, FRAMES_PER_VIDEO), (2, FRAMES_PER_VIDEO, 200)]
+    assert world.threads["download"] == {HELPER}  # the NAS client is owned by the preparation thread
+
+
+def test_twins_fill_only_the_missing_cache_sides(world):
+    second = twin(2, of=1)
+    facecache.save(2, second, [[]] * 200, PRESETS["fast"])
+    first, kept = analyse_these(world, [video(1), second])
+    assert len(kept.faces) == 200 and kept.description == first.description
+    descache.save(2, descache.cache_key(second), Description("own", "eigen"))
+    facecache_path = facecache.FACES_DIR / "2.npz"
+    facecache_path.unlink()
+    first, filled = analyse_these(world, [video(1), second])
+    assert same_faces(filled.faces, first.faces) and filled.description.summary_en == "own"
+    assert world.prepared == [1]
+
+
+@pytest.mark.parametrize("first_has_faces", [True, False])
+def test_complementary_twin_cache_sides_survive_the_first_videos_missing_side_failure(world, first_has_faces):
+    first, second = video(1), twin(2, of=1)
+    face_item, description_item = (first, second) if first_has_faces else (second, first)
+    facecache.save(face_item["id"], face_item, [[]] * 200, THOROUGH)
+    descache.save(description_item["id"], descache.cache_key(description_item), Description("saved", "gespeichert"))
+    world.download_fails[1] = SynologyError("download refused")
+    failed, complete = analyse_these(world, [first, second])
+    assert failed.error is not None and complete.error is None
+    assert len(complete.faces) == 200 and complete.description.summary_en == "saved"
+    assert analysis.is_analysed(second, describe=True)
+
+
+def test_explicit_reanalysis_replaces_only_twins_cached_under_another_rule(world):
+    second = twin(2, of=1)
+    facecache.save(1, video(1), [[]] * 78, PRESETS["fast"])
+    facecache.save(2, second, [[]] * 200, THOROUGH)
+    descache.save(1, descache.cache_key(video(1)), None)
+    descache.save(2, descache.cache_key(second), None)
+    first, kept = analyse_these(world, [video(1), second], reanalyse=True)
+    assert len(first.faces) == FRAMES_PER_VIDEO and len(kept.faces) == 200
+    assert world.prepared == [1] and kept.sampling == THOROUGH
+
+
 # -- the overlap ----------------------------------------------------------------------------------
 
 def test_the_next_video_is_prepared_while_the_current_one_is_described(world):

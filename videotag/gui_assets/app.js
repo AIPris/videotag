@@ -9,7 +9,7 @@ const API_VERSION = 4;  // must equal API_VERSION in gui.py: an update changes t
 
 const app = {
   status: null, library: null, history: null, version: null, settings: null,
-  accuracy: null, spot: null,
+  accuracy: null, spot: null, accountGeneration: 0, dataGeneration: 0,
   filter: {text: "", result: "all", person: "all"}, shown: PAGE_SIZE, open: new Set(), tab: "overview",
 };
 
@@ -298,7 +298,9 @@ function spotGroup(label, group) {
 
 function renderSpot() {
   const people = app.spot;
-  fill($("spot-result"), people === null ? null : people.length
+  const target = $("spot-result");
+  if (!target) return;
+  fill(target, people === null ? null : people.length
     ? people.map((person) => el("div", {class: "spot-person"}, el("h3", {}, person.name),
         spotGroup("Confident matches", person.confident), spotGroup("Suggestions", person.suggested)))
     : el("p", {class: "sub", style: "margin-top:10px"}, "Nothing to check: the latest report has no matches you have not already settled."));
@@ -309,11 +311,15 @@ function spotSection() {
     [3, 5, 10].map((n) => el("option", {value: String(n), selected: n === 5}, `${n} per group`)));
   const draw = el("button", {type: "button", onclick: async () => {
     draw.disabled = true;
+    const accountGeneration = app.accountGeneration, dataGeneration = app.dataGeneration;
     try {
-      app.spot = await api("/api/spotcheck", {method: "POST", body: JSON.stringify({count: Number(count.value)})});
+      const sample = await api("/api/spotcheck", {method: "POST", body: JSON.stringify({count: Number(count.value)})});
+      if (accountGeneration !== app.accountGeneration || dataGeneration !== app.dataGeneration) return;
+      app.spot = sample;
       renderSpot();
-    } catch (error) { toast(error.message); }
-    draw.disabled = false;
+    } catch (error) {
+      if (accountGeneration === app.accountGeneration && dataGeneration === app.dataGeneration) toast(error.message);
+    } finally { draw.disabled = false; }
   }}, "Draw a sample");
   setTimeout(renderSpot);  // the section is in the page by then; a sample drawn before a refresh stays on screen
   return el("section", {class: "people"},
@@ -326,7 +332,7 @@ function spotSection() {
 
 function renderOverview() {
   const lib = app.library;
-  if (!lib.report) {
+  if (!lib || !lib.report) {
     fill($("view-overview"), 
       el("h2", {}, "Nothing to show yet"),
       el("p", {class: "sub"}, "Every run saves a report of what it found. Start a dry run and the results appear here."));
@@ -351,7 +357,7 @@ function renderOverview() {
 
   const twins = lib.twins.length ? el("section", {class: "people"},
     el("h2", {}, "The same file more than once"),
-    el("p", {class: "sub"}, `${plural(lib.twins.length, "file")} sit${lib.twins.length === 1 ? "s" : ""} in Photos as more than one video. videotag analysed each once and gave every copy the same result. `
+    el("p", {class: "sub"}, `${plural(lib.twins.length, "file")} sit${lib.twins.length === 1 ? "s" : ""} in Photos as more than one video. New copies reuse analysis; existing saved results are kept. `
        + "To tidy up, delete the extra copies in Photos yourself: videotag never deletes a video."),
     el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "File"), el("th", {}, "Video numbers in Photos"))),
@@ -459,6 +465,7 @@ function videoRow(video) {
 }
 
 function renderVideoList() {
+  if (!app.library) { fill($("video-list")); $("video-count").textContent = ""; return; }
   const all = visibleVideos();
   const list = all.slice(0, app.shown);
   $("video-count").textContent = all.length === app.library.videos.length
@@ -502,7 +509,7 @@ function updateVideoControls() {
 // -- runs, log, health ---------------------------------------------------------------------------
 
 function renderRuns() {
-  const rows = app.history;
+  const rows = app.history || [];
   const widest = Math.max(1, ...rows.map((r) => r.videos));
   fill($("view-runs"), 
     el("h2", {}, "Runs"),
@@ -802,8 +809,14 @@ function renderAccountButton() {
 
 async function loadAccount() {
   let problem = null;
+  const generation = app.accountGeneration;
   try {
-    app.account = await api("/api/account");
+    const account = await api("/api/account");
+    if (generation !== app.accountGeneration) return null;
+    const identity = (value) => JSON.stringify([value.current, value.owner, value.mismatch]);
+    const changed = app.account && identity(app.account) !== identity(account);
+    app.account = account;
+    if (changed) { resetAccountData(); poll(); }
     if (app.library) { renderVideoList(); renderOverview(); }  // the links to Photos need the account, which may arrive after the library
   } catch (error) {
     problem = error.status === 404
@@ -891,12 +904,11 @@ function wireAccountDialog() {
     $("account-error").hidden = true;
     try {
       app.account = await api("/api/account", {method: "POST", body: JSON.stringify(body)});
+      resetAccountData();
       dialog.close();
       renderAccountButton();
       toast(`Now using ${app.account.current.label}.`);
       renderHealth({checks: null, at: null});  // that result described the old account
-      app.open.clear();                        // and these ids were the old account's videos
-      app.version = null;                      // the saved data changed: load the library again
       poll();
     } catch (error) {
       $("account-error").textContent = error.message;
@@ -910,9 +922,28 @@ function wireAccountDialog() {
 
 // -- loading -------------------------------------------------------------------------------------
 
+function clearSpot() {
+  app.spot = null;
+  renderSpot();
+}
+
+function resetAccountData() {
+  app.accountGeneration += 1;
+  app.dataGeneration += 1;
+  clearSpot();
+  app.open.clear();
+  app.library = app.history = app.accuracy = app.status = app.version = null;
+  renderOverview();
+  renderVideoList();
+  renderRuns();
+}
+
 async function loadData() {
-  [app.library, app.history, app.accuracy] = await Promise.all([api("/api/library"), api("/api/history"),
-                                                                  api("/api/accuracy").catch(() => null)]);
+  const accountGeneration = app.accountGeneration, dataGeneration = ++app.dataGeneration;
+  clearSpot();
+  const data = await Promise.all([api("/api/library"), api("/api/history"), api("/api/accuracy").catch(() => null)]);
+  if (accountGeneration !== app.accountGeneration || dataGeneration !== app.dataGeneration) return;
+  [app.library, app.history, app.accuracy] = data;
   renderOverview();
   updateVideoControls();
   renderVideoList();
@@ -923,8 +954,11 @@ async function loadData() {
 let pollTimer;
 async function poll() {
   clearTimeout(pollTimer);
+  const generation = app.accountGeneration;
   try {
-    app.status = await api("/api/status");
+    const status = await api("/api/status");
+    if (generation !== app.accountGeneration) return;
+    app.status = status;
     $("offline").hidden = true;
     $("stale").hidden = app.status.api === API_VERSION;
     renderRun();
@@ -934,8 +968,10 @@ async function poll() {
       await loadData();
     }
   } catch (error) {
+    if (generation !== app.accountGeneration) return;
     $("offline").hidden = false;
   }
+  if (generation !== app.accountGeneration) return;
   const running = app.status && app.status.status.state === "running";
   pollTimer = setTimeout(poll, running ? 1500 : 5000);
 }

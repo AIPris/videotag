@@ -17,6 +17,7 @@ from videotag.references import ReferenceSet, Source
 from videotag.sampling import PRESETS
 from videotag.slices import Slice, SliceError
 from videotag.state import State
+from videotag.synology import SynologyError
 
 
 class RecordingClient:
@@ -131,6 +132,41 @@ def test_an_applied_run_puts_a_suggested_video_into_the_to_check_album(tmp_path,
     run(client, state, apply=True)
     assert client.albums_created == [ALBUM_NAME] and client.album_adds == [(900, [1])]
     assert State.load(tmp_path / "state.json").review_album == 900
+
+
+def test_capped_tag_additions_put_only_successfully_suggested_videos_in_the_album(tmp_path, monkeypatch):
+    prepare(monkeypatch, description=None, can_auto=False)
+    videos = [{**VIDEO, "id": number} for number in [2, 1]]
+    monkeypatch.setattr(pipeline, "load_library", lambda client: Library([], videos))
+    client, state = RecordingClient(), State(tmp_path / "state.json")
+    options = pipeline.RunOptions(True, THOROUGH, 2, 1)
+    pipeline.run(client, None, None, options, state)
+    assert client.added == [(2, 42)]
+    assert client.album_adds == [(900, [2])]
+
+
+def test_a_failed_suggestion_removal_keeps_the_video_in_the_album(tmp_path, monkeypatch):
+    prepare(monkeypatch, description=None, can_auto=False)
+    client, state = RecordingClient(), State(tmp_path / "state.json")
+    run(client, state, apply=True)
+    prepare(monkeypatch, description=None, can_auto=False, video=now_reported_by_photos(VIDEO, client, "Alice?", "Alice"))
+    def refuse_removal(item_id, tag_id):
+        raise SynologyError("remove refused")
+    monkeypatch.setattr(client, "remove_tag", refuse_removal)
+    run(client, state, apply=True)
+    assert client.album_removes == []
+
+
+def test_negative_run_write_budget_is_refused_before_execution():
+    with pytest.raises(ValueError, match="max_writes"):
+        pipeline.RunOptions(True, THOROUGH, 2, -1)
+
+
+def test_zero_run_budget_makes_no_nas_writes(tmp_path, monkeypatch):
+    prepare(monkeypatch, can_auto=False)
+    client, state = RecordingClient(), State(tmp_path / "state.json")
+    pipeline.run(client, None, None, pipeline.RunOptions(True, THOROUGH, 2, 0), state)
+    assert client.added == [] and client.albums_created == [] and client.descriptions == {} and client.faces == {}
 
 
 def test_a_confident_video_goes_into_no_album(tmp_path, monkeypatch):

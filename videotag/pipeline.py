@@ -40,6 +40,8 @@ class RunOptions:
     slice: Slice = Slice()          # which videos a dry run looks at; a real run always covers the whole library
 
     def __post_init__(self) -> None:
+        if self.max_writes < 0:
+            raise ValueError("max_writes must be nonnegative")
         if self.apply and self.slice.narrows:
             raise SliceError("a slice is for a dry run: a real run always covers the whole library")
 
@@ -98,6 +100,8 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
                 row["folder_id"] = video["folder_id"]  # with the id, enough to link to the video in the Photos web app
             if outcome.twin_of is not None:
                 row["twin_of"] = outcome.twin_of
+            if outcome.evidence_id is not None:
+                row["evidence_id"] = outcome.evidence_id
             if outcome.error is not None:
                 log.error("%s %s: %s", video["id"], video["filename"], outcome.error)
                 record({**row, "error": str(outcome.error)})
@@ -143,13 +147,15 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
         log.info("plan: description of video %d (%d characters)", description_action.video_id,
                  len(description_action.block))
 
-    album_plan = plan_album_changes(people, library.videos, actions, current_album(client, state))
+    album_existing = current_album(client, state)
+    album_plan = plan_album_changes(people, library.videos, actions, album_existing)
     if album_plan is not None:
         log.info("plan: album '%s' %s, +%d -%d item(s)", ALBUM_NAME, "created" if album_plan.create else "updated",
                  len(album_plan.add), len(album_plan.remove))
 
     if options.apply:
-        done = execute(client, state, actions, options.max_writes)
+        successful = []
+        done = execute(client, state, actions, options.max_writes, successful)
         state.save()  # also keeps what the feedback steps learned
         log.info("%d tag change(s) written", done)
         videos_by_id = {video["id"]: video for video in library.videos}
@@ -160,7 +166,8 @@ def run(client: PhotosClient, engine: FaceEngine, describer: Describer | None, o
         verify_links(client, state)
         written = execute_descriptions(client, state, description_actions, options.max_writes)
         log.info("%d description(s) written", written)
-        moved = execute_album(client, state, album_plan, options.max_writes)
+        applied_album_plan = plan_album_changes(people, library.videos, successful, album_existing)
+        moved = execute_album(client, state, applied_album_plan, options.max_writes)
         log.info("%d album item change(s) written", moved)
     else:
         log.info("dry run: nothing written, pass --apply to write")

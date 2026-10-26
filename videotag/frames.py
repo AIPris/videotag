@@ -1,4 +1,5 @@
 """Cut still frames out of a video with ffmpeg (handles HEVC and rotation metadata)."""
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,11 +19,13 @@ def _seconds_long(video: Path) -> float | None:
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
         return None
-    probed = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)],
-                            capture_output=True, text=True)
     try:
+        probed = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(video)],
+                                capture_output=True, text=True)
+        if probed.returncode:
+            return None
         return float(probed.stdout.strip())
-    except ValueError:
+    except (OSError, ValueError):
         return None
 
 
@@ -47,9 +50,10 @@ def sample_frames(video: Path, out_dir: Path, sampling: Sampling) -> list[Path]:
                  ["-vf", f"fps={sampling.tail_fps}", "-start_number", str(len(head) + 1)], out_dir)
         except subprocess.CalledProcessError:
             # ffmpeg fails, rather than writing nothing, when no frame lies past the cut. That is a clip that ends right
-            # there. A failure that wrote frames is a real one, and so is one on a clip that goes on well past the cut:
-            # keeping that as a result would cache a truncated one.
+            # there. Only a successful probe of the boundary can establish that; an unknown or invalid duration cannot.
+            # A failure that wrote tail frames is always real: keeping it would cache a truncated result.
             length = _seconds_long(video)
-            if len(sorted(out_dir.glob("f*.jpg"))) > len(head) or (length is not None and length > sampling.head_seconds + 1):
+            at_end = length is not None and math.isfinite(length) and 0 < length <= sampling.head_seconds + 1
+            if len(sorted(out_dir.glob("f*.jpg"))) > len(head) or not at_end:
                 raise
     return sorted(out_dir.glob("f*.jpg"))

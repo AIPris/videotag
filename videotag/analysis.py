@@ -43,6 +43,7 @@ class Outcome:
     error: Exception | None = None
     sampling: Sampling | None = None  # how the frames behind `faces` were cut: a frame index means nothing without it
     twin_of: int | None = None        # the id of the video whose result this one shares: the same file under another id
+    evidence_id: int | None = None    # independently cached twins can have different faces and must use their own crops
 
 
 @dataclass
@@ -218,13 +219,30 @@ def _first_of_each(videos: list[dict]) -> tuple[list[dict], dict[int, int]]:
     return firsts, original_of
 
 
-def _copy_to_twin(original: Outcome, twin: dict) -> Outcome:
-    """The twin's own result: the original's, saved under the twin's id so the twin never needs fetching on its own."""
-    if original.error is None:
-        facecache.save(twin["id"], twin, original.faces, original.sampling)
-        if original.description is not None:
-            descache.save(twin["id"], descache.cache_key(twin), original.description)
-    return replace(original, video=twin, twin_of=original.video["id"])
+def _copy_to_twin(original: Outcome, twin: dict, sampling: Sampling, reanalyse: bool, describe: bool) -> Outcome:
+    """Reuse missing results only: each id's valid saved analysis and description belong to that id."""
+    saved = facecache.load(twin["id"], twin)
+    if reanalyse and saved is not None and saved.sampling != sampling:
+        saved = None
+    described, description = descache.load(twin["id"], descache.cache_key(twin)) if describe else (True, None)
+    shared_faces, shared_sampling = original.faces, original.sampling
+    if original.error is not None:
+        # Failure to fetch a missing description must not hide faces already saved, or vice versa.
+        source = facecache.load(original.video["id"], original.video)
+        if source is not None and (not reanalyse or source.sampling == sampling):
+            shared_faces, shared_sampling = source.faces, source.sampling
+    if saved is None and shared_faces is not None:
+        facecache.save(twin["id"], twin, shared_faces, shared_sampling)
+    if not described:
+        completed, shared = descache.load(original.video["id"], descache.cache_key(original.video))
+        if completed:  # None is a completed, unusable answer; model failures have no cache entry
+            descache.save(twin["id"], descache.cache_key(twin), shared)
+            description = shared
+    if saved is None and shared_faces is None:
+        return replace(original, video=twin, twin_of=original.video["id"])
+    return Outcome(twin, saved.faces if saved is not None else shared_faces, description,
+                   sampling=saved.sampling if saved is not None else shared_sampling, twin_of=original.video["id"],
+                   evidence_id=twin["id"] if saved is not None else original.video["id"])
 
 
 def is_analysed(video: dict, describe: bool) -> bool:
@@ -241,17 +259,31 @@ def analyse_videos(client: PhotosClient, engine: FaceEngine, describer: Describe
     videos = list(videos)
     firsts, original_of = _first_of_each(videos)
     twinned = set(original_of.values())
-    helper = _Helper(lambda video: _prepare(client, engine, describer, video, sampling, reanalyse, evidence), firsts, prefetch)
+
+    def prepare(video: dict) -> _Prepared:
+        if video["id"] in original_of:
+            # Only independently cached twins need their own crops. Keep all NAS access on the helper thread.
+            saved = facecache.load(video["id"], video)
+            if saved is None or (reanalyse and saved.sampling != sampling):
+                return _Prepared(video)
+            return _prepare(client, engine, None, video, sampling, reanalyse, evidence)
+        return _prepare(client, engine, describer, video, sampling, reanalyse, evidence)
+
+    helper = _Helper(prepare, videos if evidence is not None else firsts, prefetch)
     helper.start()
     outcomes_with_twins: dict[int, Outcome] = {}
     try:
         for video in videos:
-            if video["id"] in original_of:
-                yield _copy_to_twin(outcomes_with_twins[original_of[video["id"]]], video)
-                continue
-            item = helper.get()
+            item = helper.get() if evidence is not None or video["id"] not in original_of else None
             if isinstance(item, _Failed):
                 raise item.error
+            if video["id"] in original_of:
+                if item is not None:
+                    item.discard()
+                outcome = _copy_to_twin(outcomes_with_twins[original_of[video["id"]]], video, sampling, reanalyse,
+                                        describer is not None)
+                yield outcome
+                continue
             outcome = _finish(describer, item)
             if video["id"] in twinned:
                 outcomes_with_twins[video["id"]] = outcome

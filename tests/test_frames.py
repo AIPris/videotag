@@ -109,8 +109,37 @@ def test_a_second_pass_that_fails_on_a_clip_that_ends_there_is_just_the_end_of_t
 
 
 @needs_ffmpeg
-def test_without_ffprobe_a_failing_second_pass_is_taken_for_the_end_of_the_clip(clips, tmp_path, monkeypatch):
+def test_without_ffprobe_a_failing_second_pass_is_an_error(clips, tmp_path, monkeypatch):
     fail_the_second_pass(monkeypatch)
     real = frames.shutil.which
     monkeypatch.setattr(frames.shutil, "which", lambda name: None if name == "ffprobe" else real(name))
-    assert len(cut(clips["long"], PRESETS["balanced"], tmp_path)) == 60
+    with pytest.raises(subprocess.CalledProcessError):
+        cut(clips["long"], PRESETS["balanced"], tmp_path)
+
+
+@pytest.mark.parametrize("duration", [None, float("nan"), float("inf"), float("-inf"), -1, 0, 70])
+def test_unusable_or_long_duration_cannot_excuse_a_failed_tail(tmp_path, monkeypatch, duration):
+    monkeypatch.setattr(frames.shutil, "which", lambda name: name)
+    def fake_cut(ffmpeg, before, video, after, folder):
+        if before:
+            raise subprocess.CalledProcessError(1, "ffmpeg")
+        for index in range(60):
+            (folder / f"f{index:04d}.jpg").write_bytes(b"frame")
+    monkeypatch.setattr(frames, "_cut", fake_cut)
+    monkeypatch.setattr(frames, "_seconds_long", lambda video: duration)
+    with pytest.raises(subprocess.CalledProcessError):
+        frames.sample_frames(tmp_path / "clip.mp4", tmp_path, PRESETS["balanced"])
+
+
+def test_a_failed_probe_cannot_supply_a_duration(tmp_path, monkeypatch):
+    monkeypatch.setattr(frames.shutil, "which", lambda name: name)
+    monkeypatch.setattr(frames.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess([], 1, stdout="30"))
+    assert frames._seconds_long(tmp_path / "clip.mp4") is None
+
+
+def test_an_unreadable_probe_cannot_supply_a_duration(tmp_path, monkeypatch):
+    monkeypatch.setattr(frames.shutil, "which", lambda name: name)
+    def unavailable(*args, **kwargs):
+        raise OSError("probe could not start")
+    monkeypatch.setattr(frames.subprocess, "run", unavailable)
+    assert frames._seconds_long(tmp_path / "clip.mp4") is None
